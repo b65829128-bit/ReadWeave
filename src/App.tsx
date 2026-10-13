@@ -1,0 +1,1338 @@
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import {
+  ArrowLeft,
+  BookOpen,
+  Bookmark,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  FolderOpen,
+  Highlighter,
+  LibraryBig,
+  List,
+  LockKeyhole,
+  NotebookPen,
+  Puzzle,
+  Search,
+  Settings2,
+  Sparkles,
+  Type,
+  X,
+} from 'lucide-react'
+import { isTauri } from '@tauri-apps/api/core'
+import { Library } from './components/Library'
+import { Modal } from './components/Modal'
+import { Appearance, SettingsDialog } from './components/Settings'
+import { ActionPacks } from './components/ActionPacks'
+import { Notebook } from './components/Notebook'
+import { AssistantPanel } from './components/AssistantPanel'
+import { Answer } from './components/Answer'
+import { Reader } from './reader/Reader'
+import { openEpub, type LoadedBook } from './reader/epub'
+import type { ReaderAdapter } from './reader/interfaces'
+import { storage, download } from './core/storage'
+import {
+  defaultModel,
+  defaultPreferences,
+  type Annotation,
+  type BookRecord,
+  type Conversation,
+  type Fragment,
+  type Locator,
+  type Message,
+  type Preferences,
+  type ReadingPoint,
+} from './core/types'
+import {
+  defaultPack,
+  parsePack,
+  renderAction,
+  type ActionPack,
+  type InstalledPack,
+  type ReadingAction,
+} from './core/plugins'
+import { ReadingTools } from './core/tools'
+import {
+  createBackup,
+  exportMarkdown,
+  modelSettingsSchema,
+  parseBackup,
+  preferencesSchema,
+  restoreBackup,
+  type Backup,
+} from './core/backup'
+import { builtinHarness } from './harness/builtin'
+
+type Screen = 'library' | 'reader' | 'notes' | 'actions'
+const scopeLabels = { 'to-position': '截至提问位置', chapter: '当前章节', book: '整本书' }
+const uniqueId = () => crypto.randomUUID()
+
+function Brand({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={`brand ${compact ? 'brand-compact' : ''}`}>
+      <span className="brand-mark">
+        <BookOpen size={24} strokeWidth={1.6} />
+      </span>
+      <div>
+        <strong>
+          ReadWeave<span> / </span>
+        </strong>
+        {!compact && <small>让理解留在阅读里</small>}
+      </div>
+    </div>
+  )
+}
+
+export default function App() {
+  const [screen, setScreen] = useState<Screen>('library')
+  const [books, setBooks] = useState<BookRecord[]>([])
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [packs, setPacks] = useState<InstalledPack[]>([])
+  const [preferences, setPreferences] = useState(defaultPreferences)
+  const [model, setModel] = useState(defaultModel)
+  const [apiKey, setApiKey] = useState('')
+  const [configured, setConfigured] = useState(false)
+  const [loaded, setLoaded] = useState<LoadedBook | null>(null)
+  const [loading, setLoading] = useState('正在整理你的书架…')
+  const [readerReady, setReaderReady] = useState(false)
+  const [position, setPosition] = useState<Locator | null>(null)
+  const [chapter, setChapter] = useState('')
+  const [selection, setSelection] = useState<ReadingPoint | null>(null)
+  const [showAssistant, setShowAssistant] = useState(true)
+  const [showToc, setShowToc] = useState(false)
+  const [showAppearance, setShowAppearance] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showAbout, setShowAbout] = useState(false)
+  const [panelHeight, setPanelHeight] = useState(55)
+  const [toast, setToast] = useState('')
+  const [noteDraft, setNoteDraft] = useState<{ point: ReadingPoint; text: string } | null>(null)
+  const [packPreview, setPackPreview] = useState<ActionPack | null>(null)
+  const [packToDelete, setPackToDelete] = useState<InstalledPack | null>(null)
+  const [restorePreview, setRestorePreview] = useState<Backup | null>(null)
+  const [archiveConversation, setArchiveConversation] = useState<Conversation | null>(null)
+  const [citation, setCitation] = useState<{
+    fragment: Fragment
+    bookId: string
+    bookVersion: string
+  } | null>(null)
+  const [draft, setDraft] = useState('')
+  const [conversation, setConversation] = useState<Conversation | null>(null)
+  const [running, setRunning] = useState(false)
+  const [runStatus, setRunStatus] = useState('')
+  const [pending, setPending] = useState<{ tools: ReadingTools; question: string } | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [showBookSearch, setShowBookSearch] = useState(false)
+  const reader = useRef<ReaderAdapter>(null)
+  const activeController = useRef<AbortController | null>(null)
+  const activeTools = useRef<ReadingTools | null>(null)
+  const grants = useRef(new Set<string>())
+  const fileInput = useRef<HTMLInputElement>(null)
+  const packInput = useRef<HTMLInputElement>(null)
+  const backupInput = useRef<HTMLInputElement>(null)
+  const mounted = useRef(true)
+
+  const notify = useCallback((error: unknown) => {
+    setToast(error instanceof Error ? error.message : String(error))
+  }, [])
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(''), 7000)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
+  useEffect(() => {
+    document.documentElement.dataset.theme = preferences.theme
+  }, [preferences.theme])
+
+  const refreshData = async () => {
+    const [nextBooks, nextAnnotations, nextConversations, nextPacks] = await Promise.all([
+      storage.list<BookRecord>('books'),
+      storage.list<Annotation>('annotations'),
+      storage.list<Conversation>('conversations'),
+      storage.list<InstalledPack>('packs'),
+    ])
+    setBooks(nextBooks)
+    setAnnotations(nextAnnotations)
+    setConversations(nextConversations)
+    setPacks(nextPacks)
+  }
+
+  useEffect(() => {
+    mounted.current = true
+    void (async () => {
+      const [savedPreferences, savedModel, seeded] = await Promise.all([
+        storage.get('settings', 'preferences'),
+        storage.get('settings', 'model'),
+        storage.get('settings', 'initialized'),
+      ])
+      const nextPreferences = preferencesSchema.safeParse(savedPreferences)
+      const nextModel = modelSettingsSchema.safeParse(savedModel)
+      const initialPreferences = nextPreferences.success ? nextPreferences.data : defaultPreferences
+      const initialModel = nextModel.success ? nextModel.data : defaultModel
+      setPreferences(initialPreferences)
+      setModel(initialModel)
+      await storage.put('settings', 'preferences', initialPreferences)
+      await storage.put('settings', 'model', initialModel)
+      if (!seeded) {
+        setLoading('正在准备两本离线示例书…')
+        for (const [index, fileName] of ['gradient.epub', 'understanding.epub'].entries()) {
+          const response = await fetch(`${import.meta.env.BASE_URL}samples/${fileName}`)
+          if (!response.ok) throw new Error('示例书加载失败，请尝试导入自己的 EPUB。')
+          const blob = await response.blob()
+          const sample = await openEpub(blob, fileName)
+          const record = { ...sample.record, isSample: true, coverTone: index === 0 ? 1 : 0 }
+          sample.book.destroy()
+          const existing = await storage.get<BookRecord>('books', record.id)
+          if (!existing) {
+            await storage.putBlob(record.id, blob)
+            await storage.put('books', record.id, record)
+          }
+        }
+        await storage.put('packs', defaultPack.id, {
+          id: defaultPack.id,
+          manifest: defaultPack,
+          enabled: true,
+          installedAt: new Date().toISOString(),
+        } satisfies InstalledPack)
+        await storage.put('settings', 'initialized', true)
+      }
+    })()
+      .catch(notify)
+      .finally(async () => {
+        if (mounted.current) {
+          await refreshData().catch(notify)
+          setLoading('')
+        }
+      })
+    return () => {
+      mounted.current = false
+      activeTools.current?.revoke()
+      activeController.current?.abort()
+    }
+  }, [notify])
+
+  const cancel = () => {
+    activeTools.current?.revoke()
+    activeTools.current = null
+    const controller = activeController.current
+    activeController.current = null
+    controller?.abort()
+    setRunning(false)
+    setRunStatus('')
+    if (controller)
+      setConversation((current) =>
+        current
+          ? {
+              ...current,
+              messages: current.messages.map((message) =>
+                message.role === 'assistant' && !message.status
+                  ? { ...message, status: 'cancelled' }
+                  : message,
+              ),
+            }
+          : null,
+      )
+  }
+  const newTopic = () => {
+    cancel()
+    setConversation(null)
+    setDraft('')
+    setPending(null)
+  }
+  const changeScreen = (next: Screen) => {
+    if (screen === 'reader' && next !== 'reader') cancel()
+    setScreen(next)
+    setSelection(null)
+  }
+
+  const savePreferences = (next: Preferences) => {
+    const parsed = preferencesSchema.parse(next)
+    if (parsed.scope !== preferences.scope) {
+      newTopic()
+      grants.current.clear()
+    }
+    setPreferences(parsed)
+    void storage.put('settings', 'preferences', parsed).catch(notify)
+  }
+  const openBook = async (record: BookRecord, locator?: Locator) => {
+    cancel()
+    setPending(null)
+    setLoading('正在打开书籍…')
+    setReaderReady(false)
+    try {
+      const blob = await storage.getBlob(record.id)
+      if (!blob) throw new Error('原书尚未恢复。请重新导入相同版本的 EPUB，笔记和进度会自动关联。')
+      const next = await openEpub(blob, record.fileName, {
+        ...record,
+        ...(locator ? { position: locator } : {}),
+      })
+      const old = loaded
+      setLoaded(next)
+      setPosition(record.position ?? null)
+      setSelection(null)
+      setConversation(null)
+      setDraft('')
+      setScreen('reader')
+      setLoading('正在排版…')
+      setShowToc(false)
+      if (old) setTimeout(() => old.book.destroy(), 100)
+    } catch (error) {
+      setLoading('')
+      notify(error)
+    }
+  }
+  const importBook = async (file: File) => {
+    setLoading('正在校验和导入 EPUB…')
+    try {
+      const next = await openEpub(file, file.name)
+      const previous = await storage.get<BookRecord>('books', next.record.id)
+      const record = previous ?? next.record
+      await storage.putBlob(record.id, file)
+      await storage.put('books', record.id, record)
+      next.book.destroy()
+      await refreshData()
+      await openBook(record)
+      notify(previous ? '这本书已在书架中，已恢复上次的位置。' : '书籍已导入，开始阅读吧。')
+    } catch (error) {
+      setLoading('')
+      notify(error)
+    }
+  }
+  const onPosition = (locator: Locator, label: string) => {
+    if (!loaded) return
+    setPosition(locator)
+    setChapter(label)
+    const record = { ...loaded.record, position: locator, lastOpenedAt: new Date().toISOString() }
+    setBooks((current) => current.map((book) => (book.id === record.id ? record : book)))
+    void storage.put('books', record.id, record).catch(notify)
+  }
+  const capture = (): ReadingPoint | null => {
+    const point = reader.current?.capture()
+    if (!point) {
+      notify('阅读位置尚未就绪，请在正文出现后重试。')
+      return null
+    }
+    return point
+  }
+  const saveAnnotation = async (kind: Annotation['kind'], point?: ReadingPoint, note = '') => {
+    const current = point ?? capture()
+    if (!current || !loaded) return
+    const annotation: Annotation = {
+      id: uniqueId(),
+      bookId: loaded.record.id,
+      bookVersion: loaded.record.version,
+      kind,
+      text: current.text.slice(0, 6000),
+      note,
+      chapter:
+        loaded.paragraphs.find((p) => p.id === current.locator.paragraphId)?.chapter ?? chapter,
+      locator: current.locator,
+      createdAt: new Date().toISOString(),
+    }
+    await storage.put('annotations', annotation.id, annotation)
+    setAnnotations((current) => [...current, annotation])
+    notify(
+      kind === 'bookmark' ? '书签已保存。' : kind === 'highlight' ? '高亮已保存。' : '笔记已保存。',
+    )
+  }
+  const saveAnswer = async (message: Message) => {
+    if (!conversation || !loaded) return
+    await saveAnnotation(
+      'note',
+      {
+        locator: conversation.snapshot.locator,
+        text: conversation.snapshot.selection || conversation.snapshot.initial.at(-1)?.text || '',
+        isSelection: !!conversation.snapshot.selection,
+      },
+      message.content,
+    )
+  }
+  const grantKey = (tools: ReadingTools) =>
+    `${model.endpoint}|${model.model}|${tools.snapshot.bookVersion}|${tools.snapshot.scope}`
+
+  const startRun = async (tools: ReadingTools, question: string) => {
+    if (!loaded || activeController.current) return
+    const controller = new AbortController()
+    activeController.current = controller
+    activeTools.current = tools
+    const assistantId = uniqueId()
+    const previous = conversation?.snapshot.id === tools.snapshot.id ? conversation : null
+    const history = previous?.messages ?? []
+    let current: Conversation = previous
+      ? { ...previous, messages: [...previous.messages] }
+      : {
+          id: uniqueId(),
+          bookId: loaded.record.id,
+          snapshot: structuredClone(tools.snapshot),
+          messages: [],
+          evidence: tools.allEvidence(),
+          createdAt: new Date().toISOString(),
+        }
+    current.messages.push(
+      { id: uniqueId(), role: 'user', content: question },
+      { id: assistantId, role: 'assistant', content: '' },
+    )
+    setConversation(current)
+    setDraft('')
+    setPending(null)
+    setRunning(true)
+    setShowAssistant(true)
+    const publish = () => {
+      if (activeController.current === controller)
+        setConversation({
+          ...current,
+          messages: [...current.messages],
+          evidence: [...current.evidence],
+        })
+    }
+    const updateAnswer = (transform: (message: Message) => Message) => {
+      current = {
+        ...current,
+        messages: current.messages.map((message) =>
+          message.id === assistantId ? transform(message) : message,
+        ),
+      }
+      publish()
+    }
+    try {
+      await builtinHarness.submit(
+        { tools, question, history, settings: model, apiKey, signal: controller.signal },
+        (event) => {
+          if (
+            controller.signal.aborted ||
+            event.runId !== tools.runId ||
+            activeController.current !== controller
+          )
+            return
+          if (event.type === 'text')
+            updateAnswer((message) => ({ ...message, content: message.content + event.delta }))
+          if (event.type === 'status') setRunStatus(event.text)
+          if (event.type === 'evidence') {
+            current = { ...current, evidence: event.fragments }
+            publish()
+          }
+        },
+      )
+      updateAnswer((message) => ({ ...message, status: 'done' }))
+    } catch (error) {
+      updateAnswer((message) => ({
+        ...message,
+        status: controller.signal.aborted ? 'cancelled' : 'error',
+      }))
+      if (!controller.signal.aborted)
+        notify(
+          error instanceof TypeError
+            ? new Error(
+                '无法连接模型服务。请检查网络和地址；浏览器预览还需要服务支持跨域，Windows 客户端不受此限制。',
+              )
+            : error,
+        )
+    } finally {
+      current = { ...current, evidence: tools.allEvidence() }
+      try {
+        await storage.put('conversations', current.id, current)
+        setConversations((all) => [...all.filter((c) => c.id !== current.id), current])
+      } catch (error) {
+        notify(error)
+      }
+      if (activeController.current === controller) {
+        activeController.current = null
+        setRunning(false)
+        publish()
+        setRunStatus('')
+      }
+    }
+  }
+  const ask = (question: string) => {
+    if (!question.trim() || running || !loaded) return
+    setDraft(question)
+    setShowAssistant(true)
+    if (!configured) {
+      setShowSettings(true)
+      return
+    }
+    try {
+      let tools = activeTools.current
+      if (!tools || !conversation || tools.snapshot.id !== conversation.snapshot.id) {
+        const point = capture()
+        if (!point) return
+        tools = new ReadingTools(loaded.record, loaded.paragraphs, point, preferences.scope)
+      }
+      if (!grants.current.has(grantKey(tools))) setPending({ tools, question })
+      else void startRun(tools, question)
+    } catch (error) {
+      notify(error)
+    }
+  }
+  const askAction = (action: ReadingAction) =>
+    ask(
+      renderAction(action, {
+        selection: selection?.text ?? '',
+        title: loaded?.record.title ?? '',
+        chapter,
+        question: draft,
+      }),
+    )
+
+  const installPack = async () => {
+    if (!packPreview) return
+    const previous = packs.find((pack) => pack.id === packPreview.id)
+    const installed: InstalledPack = {
+      id: packPreview.id,
+      manifest: packPreview,
+      enabled: previous?.enabled ?? true,
+      installedAt: new Date().toISOString(),
+      ...(previous ? { previous: previous.manifest } : {}),
+    }
+    await storage.put('packs', installed.id, installed)
+    setPacks((current) => [...current.filter((pack) => pack.id !== installed.id), installed])
+    setPackPreview(null)
+    notify(previous ? '动作包已更新，可回滚到上一版本。' : '动作包已安装。')
+  }
+  const updatePack = async (pack: InstalledPack) => {
+    setPacks((current) => current.map((item) => (item.id === pack.id ? pack : item)))
+    try {
+      await storage.put('packs', pack.id, pack)
+    } catch (error) {
+      await refreshData()
+      throw error
+    }
+  }
+  const exportNotes = () =>
+    download(
+      `ReadWeave-notes-${new Date().toISOString().slice(0, 10)}.md`,
+      exportMarkdown(
+        annotations,
+        conversations,
+        (id) => books.find((book) => book.id === id)?.title ?? '未导入的书籍',
+      ),
+      'text/markdown;charset=utf-8',
+    )
+  const exportBackup = async (includeOriginals: boolean) => {
+    download(
+      `ReadWeave-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      JSON.stringify(await createBackup(includeOriginals), null, 2),
+      'application/json',
+    )
+    notify('备份已导出，不包含服务密钥。')
+  }
+  const showCitation = (fragment: Fragment, source = conversation) => {
+    if (source)
+      setCitation({ fragment, bookId: source.bookId, bookVersion: source.snapshot.bookVersion })
+  }
+  const navigateCitation = async () => {
+    if (!citation) return
+    try {
+      const record = books.find((book) => book.id === citation.bookId)
+      if (!record || record.version !== citation.bookVersion)
+        throw new Error('引用对应的书籍版本不可用。')
+      let target = loaded
+      let temporary: LoadedBook | null = null
+      if (!target || target.record.id !== record.id) {
+        const blob = await storage.getBlob(record.id)
+        if (!blob) throw new Error('请先重新导入此书的原始 EPUB。')
+        temporary = await openEpub(blob, record.fileName, record)
+        target = temporary
+      }
+      const paragraph =
+        activeTools.current?.snapshot.bookId === record.id
+          ? activeTools.current.resolveAnchor(citation.fragment.anchorRef)
+          : undefined
+      const matches = paragraph
+        ? [paragraph]
+        : target.paragraphs.filter((p) => p.text.includes(citation.fragment.text))
+      if (matches.length !== 1) {
+        temporary?.book.destroy()
+        throw new Error('引用存在多个候选或已经失效。原文仍可在此查看，未自动跳转。')
+      }
+      const match = matches[0]
+      const locator: Locator = {
+        cfi: match.cfi,
+        sectionIndex: match.sectionIndex,
+        paragraphId: match.id,
+        endOffset: match.text.length,
+        progress: 0,
+        quote: { exact: citation.fragment.text.slice(0, 240), prefix: '', suffix: '' },
+      }
+      temporary?.book.destroy()
+      if (loaded?.record.id === record.id && screen === 'reader')
+        await reader.current?.navigate(locator)
+      else await openBook(record, locator)
+      setCitation(null)
+      setArchiveConversation(null)
+    } catch (error) {
+      notify(error)
+    }
+  }
+
+  const activeAnnotations = loaded
+    ? annotations.filter(
+        (annotation) =>
+          annotation.bookId === loaded.record.id &&
+          annotation.bookVersion === loaded.record.version,
+      )
+    : []
+  const actions = packs
+    .filter((pack) => pack.enabled)
+    .flatMap((pack) =>
+      pack.manifest.actions.map((action) => ({ ...action, id: `${pack.id}:${action.id}` })),
+    )
+  const reading = screen === 'reader' && loaded
+  const bookSearchResults =
+    loaded && searchTerm.trim()
+      ? loaded.paragraphs
+          .filter((p) => p.text.toLowerCase().includes(searchTerm.trim().toLowerCase()))
+          .slice(0, 30)
+      : []
+
+  return (
+    <div
+      className={`app ${reading ? 'in-reader' : ''}`}
+      style={{ '--panel-height': `${panelHeight}dvh` } as CSSProperties}
+    >
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".epub,application/epub+zip"
+        hidden
+        aria-label="导入 EPUB 文件"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file) void importBook(file)
+        }}
+      />
+      <input
+        ref={packInput}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file)
+            void (async () => {
+              if (file.size > 256 * 1024) throw new Error('动作包超过 256 KB。')
+              setPackPreview(parsePack(await file.text()))
+            })().catch(notify)
+        }}
+      />
+      <input
+        ref={backupInput}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file)
+            void (async () => {
+              if (file.size > 64 * 1024 * 1024) throw new Error('备份超过 64 MB。')
+              setRestorePreview(parseBackup(await file.text()))
+            })().catch(notify)
+        }}
+      />
+      {!reading ? (
+        <>
+          <aside className="app-sidebar">
+            <Brand />
+            <nav aria-label="主导航">
+              {(
+                [
+                  { id: 'library', label: '我的书架', icon: LibraryBig },
+                  { id: 'notes', label: '阅读笔记', icon: NotebookPen },
+                  { id: 'actions', label: '阅读动作', icon: Puzzle },
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item.id}
+                  className={screen === item.id ? 'active' : ''}
+                  onClick={() => changeScreen(item.id)}
+                >
+                  <item.icon size={19} />
+                  {item.label}
+                  {item.id === 'library' && <span>{books.length}</span>}
+                </button>
+              ))}
+            </nav>
+            <div className="sidebar-bottom">
+              <div className="local-status">
+                <span>
+                  <LockKeyhole size={17} />
+                </span>
+                <div>
+                  <strong>本地优先，安心阅读</strong>
+                  <small>你的书和笔记留在设备上</small>
+                </div>
+              </div>
+              <button onClick={() => setShowSettings(true)}>
+                <Settings2 size={18} />
+                设置
+              </button>
+              <button onClick={() => setShowAbout(true)}>
+                <CircleHelp size={18} />
+                关于 ReadWeave <small>α 0.1</small>
+              </button>
+            </div>
+          </aside>
+          <main className="app-main">
+            <header className="library-header">
+              <span>
+                <FolderOpen size={16} />
+                {screen === 'library' ? '我的书架' : screen === 'notes' ? '阅读笔记' : '阅读动作'}
+              </span>
+              <div>
+                <span className="local-badge">
+                  <i />
+                  本地阅读空间
+                </span>
+                <button
+                  className="icon-button"
+                  onClick={() => setShowSettings(true)}
+                  aria-label="打开设置"
+                >
+                  <Settings2 size={18} />
+                </button>
+              </div>
+            </header>
+            {screen === 'library' && (
+              <Library
+                books={books}
+                loading={loading}
+                onOpen={(record) => {
+                  void openBook(record)
+                }}
+                onImport={() => fileInput.current?.click()}
+              />
+            )}
+            {screen === 'actions' && (
+              <ActionPacks
+                packs={packs}
+                onImport={() => packInput.current?.click()}
+                onToggle={(pack) => {
+                  void updatePack({ ...pack, enabled: !pack.enabled }).catch(notify)
+                }}
+                onExport={(pack) =>
+                  download(
+                    `${pack.id}.json`,
+                    JSON.stringify(pack.manifest, null, 2),
+                    'application/json',
+                  )
+                }
+                onRemove={setPackToDelete}
+                onRollback={(pack) => {
+                  if (pack.previous)
+                    void updatePack({ ...pack, manifest: pack.previous, previous: pack.manifest })
+                      .then(() => notify('已回滚动作包。'))
+                      .catch(notify)
+                }}
+              />
+            )}
+            {screen === 'notes' && (
+              <Notebook
+                books={books}
+                annotations={annotations}
+                conversations={conversations}
+                onLocate={(annotation) => {
+                  const book = books.find((book) => book.id === annotation.bookId)
+                  if (book && book.version === annotation.bookVersion)
+                    void openBook(book, annotation.locator)
+                  else notify('此标注对应的书籍版本不可用。')
+                }}
+                onRemove={(annotation) => {
+                  void storage
+                    .remove('annotations', annotation.id)
+                    .then(() =>
+                      setAnnotations((current) =>
+                        current.filter((item) => item.id !== annotation.id),
+                      ),
+                    )
+                    .catch(notify)
+                }}
+                onConversation={setArchiveConversation}
+                onExport={exportNotes}
+              />
+            )}
+          </main>
+        </>
+      ) : (
+        <>
+          <header className="reader-header">
+            <div className="reader-header-left">
+              <button
+                className="icon-button"
+                onClick={() => changeScreen('library')}
+                aria-label="返回书架"
+              >
+                <ArrowLeft size={20} />
+              </button>
+              <Brand compact />
+              <span className="header-divider" />
+              <span className="reader-title">{loaded.record.title}</span>
+              <span className="reader-author">{loaded.record.author}</span>
+            </div>
+            <div className="reader-toolbar">
+              <button
+                className={`icon-button toc-toggle ${showToc ? 'active' : ''}`}
+                onClick={() => setShowToc(!showToc)}
+                aria-label="显示目录"
+              >
+                <List size={20} />
+              </button>
+              <button
+                className="icon-button"
+                onClick={() => setShowBookSearch(true)}
+                aria-label="搜索书内原文"
+              >
+                <Search size={19} />
+              </button>
+              <button
+                className="icon-button"
+                onClick={() => setShowAppearance(true)}
+                aria-label="阅读排版"
+              >
+                <Type size={20} />
+              </button>
+              <button
+                className="icon-button"
+                disabled={!readerReady}
+                onClick={() => {
+                  void saveAnnotation('bookmark').catch(notify)
+                }}
+                aria-label="添加书签"
+              >
+                <Bookmark size={19} />
+              </button>
+              <span className="header-divider" />
+              <button
+                aria-label="阅读伙伴"
+                className={`button companion-toggle ${showAssistant ? 'selected' : ''}`}
+                onClick={() => setShowAssistant(!showAssistant)}
+              >
+                <Sparkles size={17} />
+                <span>阅读伙伴</span>
+              </button>
+            </div>
+          </header>
+          <div
+            className={`reading-layout ${showAssistant ? 'with-assistant' : ''} ${showToc ? 'toc-open' : ''}`}
+          >
+            <aside className="toc-panel" aria-label="书籍目录">
+              <div className="toc-heading">
+                <h2>目录</h2>
+                <span>{loaded.book.sections.length} 个章节</span>
+                <button
+                  className="icon-button"
+                  onClick={() => setShowToc(false)}
+                  aria-label="收起目录"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <nav>
+                {(loaded.book.toc ?? []).map((item, i) => (
+                  <div key={`${item.href}-${i}`}>
+                    <button
+                      className={chapter === item.label ? 'active' : ''}
+                      onClick={() => {
+                        void reader.current?.goTo(item.href)
+                        setShowToc(false)
+                      }}
+                    >
+                      <span>{String(i + 1).padStart(2, '0')}</span>
+                      {item.label}
+                    </button>
+                    {item.subitems?.map((subitem) => (
+                      <button
+                        className="toc-subitem"
+                        key={subitem.href}
+                        onClick={() => {
+                          void reader.current?.goTo(subitem.href)
+                          setShowToc(false)
+                        }}
+                      >
+                        {subitem.label}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </nav>
+              <div className="toc-bottom">
+                <BookOpen size={21} />
+                <strong>慢慢读，读进去。</strong>
+                <p>每一次停留，都有意义。</p>
+                <div className="toc-progress">
+                  <span style={{ width: `${(position?.progress ?? 0) * 100}%` }} />
+                </div>
+                <span>已读 {Math.round((position?.progress ?? 0) * 100)}%</span>
+                <button className="text-button" onClick={() => changeScreen('notes')}>
+                  <NotebookPen size={15} />
+                  本书已保存 {activeAnnotations.length} 条标注
+                </button>
+              </div>
+            </aside>
+            <main className="reading-main">
+              <div className="reading-caption">
+                <span>{loaded.record.title}</span>
+                <span>{loaded.record.isSample ? '原创阅读示例' : 'EPUB'}</span>
+              </div>
+              <div className="reader-host">
+                <Reader
+                  ref={reader}
+                  loaded={loaded}
+                  preferences={preferences}
+                  annotations={activeAnnotations}
+                  onPosition={onPosition}
+                  onSelection={setSelection}
+                  onReady={() => {
+                    setReaderReady(true)
+                    setLoading('')
+                  }}
+                  onError={(error) => {
+                    setLoading('')
+                    notify(error)
+                  }}
+                />
+                {!readerReady && (
+                  <div className="reader-loading">
+                    <span className="spinner" />
+                    {loading || '正在打开正文…'}
+                  </div>
+                )}
+              </div>
+              {selection && (
+                <div className="selection-toolbar">
+                  <span>已选 {selection.text.length} 字</span>
+                  <button
+                    onClick={() => {
+                      setShowAssistant(true)
+                      setDraft('请解释这段内容。')
+                    }}
+                  >
+                    <Sparkles size={15} />
+                    提问
+                  </button>
+                  <button
+                    onClick={() => {
+                      void saveAnnotation('highlight', selection).catch(notify)
+                    }}
+                  >
+                    <Highlighter size={15} />
+                    高亮
+                  </button>
+                  <button onClick={() => setNoteDraft({ point: selection, text: '' })}>
+                    <NotebookPen size={15} />
+                    笔记
+                  </button>
+                </div>
+              )}
+              <footer className="reading-footer">
+                <button
+                  className="icon-button"
+                  onClick={() => {
+                    void reader.current?.previous()
+                  }}
+                  aria-label="上一页"
+                >
+                  <ChevronLeft size={20} />
+                </button>
+                <span>{chapter || '阅读中'}</span>
+                <button
+                  className="icon-button"
+                  onClick={() => {
+                    void reader.current?.next()
+                  }}
+                  aria-label="下一页"
+                >
+                  <ChevronRight size={20} />
+                </button>
+                <span className="reading-saved">
+                  <Check size={13} />
+                  {Math.round((position?.progress ?? 0) * 100)}%
+                </span>
+              </footer>
+            </main>
+            {showAssistant && (
+              <AssistantPanel
+                selection={selection}
+                conversation={conversation}
+                actions={actions}
+                draft={draft}
+                running={running}
+                status={runStatus}
+                configured={configured}
+                onDraft={setDraft}
+                onSubmit={ask}
+                onAction={askAction}
+                onCancel={cancel}
+                onNew={newTopic}
+                onClose={() => setShowAssistant(false)}
+                onSettings={() => setShowSettings(true)}
+                onOrigin={() => {
+                  if (conversation)
+                    void reader.current?.navigate(conversation.snapshot.locator).catch(notify)
+                }}
+                onCitation={showCitation}
+                onSave={(message) => {
+                  void saveAnswer(message).catch(notify)
+                }}
+                onResize={setPanelHeight}
+              />
+            )}
+          </div>
+        </>
+      )}
+      {showSettings && (
+        <SettingsDialog
+          settings={model}
+          apiKey={apiKey}
+          preferences={preferences}
+          onSave={async (settings, key) => {
+            const checked = modelSettingsSchema.parse(settings)
+            await storage.put('settings', 'model', checked)
+            cancel()
+            setModel(checked)
+            setApiKey(key)
+            setConfigured(true)
+            grants.current.clear()
+            notify('模型设置已保存，密钥仅用于本次运行。')
+          }}
+          onPreferences={savePreferences}
+          onExport={exportBackup}
+          onRestore={() => backupInput.current?.click()}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
+      {showAppearance && (
+        <Modal title="舒适地读下去" onClose={() => setShowAppearance(false)}>
+          <Appearance value={preferences} onChange={savePreferences} />
+          <div className="modal-footer">
+            <span className="muted">排版变化后会保持阅读位置</span>
+            <button className="button primary" onClick={() => setShowAppearance(false)}>
+              完成
+            </button>
+          </div>
+        </Modal>
+      )}
+      {noteDraft && (
+        <Modal title="记下此刻的思考" onClose={() => setNoteDraft(null)}>
+          <blockquote className="note-context">{noteDraft.point.text.slice(0, 500)}</blockquote>
+          <label className="field">
+            我的笔记
+            <textarea
+              autoFocus
+              rows={6}
+              maxLength={20_000}
+              value={noteDraft.text}
+              onChange={(event) => setNoteDraft({ ...noteDraft, text: event.target.value })}
+              placeholder="用自己的话，说说你理解了什么…"
+            />
+          </label>
+          <div className="modal-footer">
+            <span className="muted">笔记保存在你的设备上</span>
+            <button
+              className="button primary"
+              disabled={!noteDraft.text.trim()}
+              onClick={() => {
+                void saveAnnotation('note', noteDraft.point, noteDraft.text)
+                  .then(() => setNoteDraft(null))
+                  .catch(notify)
+              }}
+            >
+              保存笔记
+            </button>
+          </div>
+        </Modal>
+      )}
+      {pending && (
+        <Modal title="发送前，看看会分享什么" onClose={() => setPending(null)} wide>
+          <p className="muted">问题和下列原文将发送给你配置的模型服务。服务可能保留收到的内容。</p>
+          <dl className="send-details">
+            <div>
+              <dt>接收服务</dt>
+              <dd>
+                {new URL(model.endpoint).host} · {model.model}
+              </dd>
+            </div>
+            <div>
+              <dt>资料范围</dt>
+              <dd>
+                {scopeLabels[pending.tools.snapshot.scope]} · {pending.tools.snapshot.bookTitle}
+              </dd>
+            </div>
+            <div>
+              <dt>你的问题</dt>
+              <dd>{pending.question}</dd>
+            </div>
+          </dl>
+          <div className="send-preview">
+            {pending.tools.snapshot.initial.map((fragment) => (
+              <div key={fragment.citationId}>
+                <strong>{fragment.label}</strong>
+                <p>{fragment.text}</p>
+              </div>
+            ))}
+          </div>
+          {conversation && conversation.snapshot.id === pending.tools.snapshot.id && (
+            <details className="send-history">
+              <summary>还会发送本话题最近的对话</summary>
+              {conversation.messages
+                .slice(-12)
+                .filter((message) => message.status !== 'error')
+                .map((message) => (
+                  <div key={message.id}>
+                    <strong>{message.role === 'user' ? '问题' : '回答'}</strong>
+                    <p>{message.content.slice(0, 12_000)}</p>
+                  </div>
+                ))}
+            </details>
+          )}
+          <p className="small muted">
+            后续可在以上范围内取证，每轮有读取上限。普通书内读取无需反复确认。范围或服务变化时会再次预览。
+          </p>
+          <div className="modal-footer">
+            <button className="button" onClick={() => setPending(null)}>
+              暂不发送
+            </button>
+            <button
+              className="button primary"
+              onClick={() => {
+                grants.current.add(grantKey(pending.tools))
+                void startRun(pending.tools, pending.question)
+              }}
+            >
+              允许此书会话发送
+            </button>
+          </div>
+        </Modal>
+      )}
+      {packPreview && (
+        <Modal
+          title={
+            packs.some((pack) => pack.id === packPreview.id) ? '预览动作包更新' : '预览并安装动作包'
+          }
+          onClose={() => setPackPreview(null)}
+        >
+          <div className="pack-preview">
+            <Puzzle size={28} />
+            <h3>{packPreview.name}</h3>
+            <p>{packPreview.description}</p>
+            <code>
+              {packPreview.id} · v{packPreview.version}
+            </code>
+            {packPreview.actions.map((action) => (
+              <div key={action.id}>
+                <strong>{action.label}</strong>
+                <p>{action.promptTemplate}</p>
+              </div>
+            ))}
+          </div>
+          <p className="small muted">
+            不运行代码，不扩大书籍范围，不自动开启联网。同一 ID
+            的更新仅凭此预览由你确认，不代表已验证发布者身份。
+          </p>
+          <div className="modal-footer">
+            <button className="button" onClick={() => setPackPreview(null)}>
+              取消
+            </button>
+            <button
+              className="button primary"
+              onClick={() => {
+                void installPack().catch(notify)
+              }}
+            >
+              {packs.some((pack) => pack.id === packPreview.id) ? '确认替换，可回滚' : '安装动作包'}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {packToDelete && (
+        <Modal title="卸载这个动作包？" onClose={() => setPackToDelete(null)}>
+          <p>将移除“{packToDelete.manifest.name}”的快捷动作。你已经保存的笔记和问答会保留。</p>
+          <div className="modal-footer">
+            <button className="button" onClick={() => setPackToDelete(null)}>
+              保留
+            </button>
+            <button
+              className="button danger"
+              onClick={() => {
+                void storage
+                  .remove('packs', packToDelete.id)
+                  .then(() => {
+                    setPacks((current) => current.filter((pack) => pack.id !== packToDelete.id))
+                    setPackToDelete(null)
+                  })
+                  .catch(notify)
+              }}
+            >
+              卸载动作包
+            </button>
+          </div>
+        </Modal>
+      )}
+      {restorePreview && (
+        <Modal title="预览数据恢复" onClose={() => setRestorePreview(null)}>
+          <p>
+            备份包含 {restorePreview.books.length} 本书、{restorePreview.annotations.length}{' '}
+            条标注、{restorePreview.conversations.length} 段问答和 {restorePreview.packs.length}{' '}
+            个动作包。
+          </p>
+          <p className="muted">
+            同 ID
+            的记录会被备份覆盖，其他记录会保留。恢复前先下载当前数据的备份；服务密钥不会恢复。若不包含原书，需要重新导入相同
+            EPUB。
+          </p>
+          <div className="modal-footer">
+            <button className="button" onClick={() => setRestorePreview(null)}>
+              取消
+            </button>
+            <button
+              className="button primary"
+              onClick={() => {
+                void (async () => {
+                  cancel()
+                  download(
+                    `ReadWeave-before-restore-${Date.now()}.json`,
+                    JSON.stringify(await createBackup(false), null, 2),
+                    'application/json',
+                  )
+                  await restoreBackup(restorePreview)
+                  setPreferences(restorePreview.preferences)
+                  setModel(restorePreview.model)
+                  setApiKey('')
+                  setConfigured(false)
+                  grants.current.clear()
+                  setRestorePreview(null)
+                  setShowSettings(false)
+                  changeScreen('library')
+                  await refreshData()
+                  notify('数据已恢复。模型密钥需要重新输入。')
+                })().catch(notify)
+              }}
+            >
+              先备份，再恢复
+            </button>
+          </div>
+        </Modal>
+      )}
+      {citation && (
+        <Modal title="回到实际提供的原文" onClose={() => setCitation(null)}>
+          <p className="section-eyebrow">{citation.fragment.label}</p>
+          <blockquote className="citation-source">{citation.fragment.text}</blockquote>
+          <p className="small muted">
+            此处展示实际传给模型的文字。定位成功只核验来源，不保证解释正确。
+          </p>
+          <div className="modal-footer">
+            <button className="button" onClick={() => setCitation(null)}>
+              继续查看回答
+            </button>
+            <button
+              className="button primary"
+              onClick={() => {
+                void navigateCitation()
+              }}
+            >
+              <BookOpen size={16} />
+              定位原文
+            </button>
+          </div>
+        </Modal>
+      )}
+      {archiveConversation && (
+        <Modal title="保存的阅读问答" onClose={() => setArchiveConversation(null)} wide>
+          <p className="muted">
+            {archiveConversation.snapshot.bookTitle} · {archiveConversation.snapshot.chapter}
+          </p>
+          <div className="archived-messages">
+            {archiveConversation.messages.map((message) => (
+              <div key={message.id}>
+                <strong>
+                  {message.role === 'user' ? '你的问题' : '阅读伙伴'}
+                  {message.status === 'cancelled'
+                    ? '（已取消）'
+                    : message.status === 'error'
+                      ? '（未完成）'
+                      : ''}
+                </strong>
+                <Answer
+                  text={message.content}
+                  evidence={archiveConversation.evidence}
+                  onCitation={(fragment) => showCitation(fragment, archiveConversation)}
+                />
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+      {showBookSearch && (
+        <Modal title="在书中寻找原文" onClose={() => setShowBookSearch(false)} wide>
+          <label className="search-box book-search-box">
+            <Search size={19} />
+            <input
+              autoFocus
+              aria-label="搜索书内原文"
+              placeholder="输入一个词或一句话…"
+              value={searchTerm}
+              maxLength={160}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+          </label>
+          <p className="small muted">
+            这是你主动查看的全书搜索，不会自动将结果发送给模型。当前原型采用文本扫描，最多展示 30
+            条。
+          </p>
+          <div className="book-search-results">
+            {bookSearchResults.map((paragraph) => (
+              <button
+                key={paragraph.id}
+                onClick={() => {
+                  void reader.current?.goTo(paragraph.cfi)
+                  setShowBookSearch(false)
+                }}
+              >
+                <strong>{paragraph.chapter}</strong>
+                <p>{paragraph.text}</p>
+              </button>
+            ))}
+            {searchTerm.trim() && !bookSearchResults.length && (
+              <p className="muted">没有找到这段文字，可以换个短词试试。</p>
+            )}
+          </div>
+        </Modal>
+      )}
+      {showAbout && (
+        <Modal title="关于 ReadWeave" onClose={() => setShowAbout(false)}>
+          <Brand />
+          <p>在原文旁理解，顺畅继续阅读。</p>
+          <p className="muted">
+            v0.1.0-alpha.1 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
+            foliate-js。正式目标为 Windows 11 与 Android 平板。
+          </p>
+          <div className="inline-notice">
+            <BookOpen size={19} />
+            <span>
+              {isTauri()
+                ? '当前使用原生客户端：书籍保存在应用目录，记录使用 SQLite。'
+                : '当前使用浏览器预览：数据存在本浏览器的 IndexedDB，请定期备份。浏览器清理可能删除数据。'}
+            </span>
+          </div>
+          <p className="muted small">
+            Android 真机、真实模型双服务验收、Hermes / Connector / MCP
+            和安全凭据持久化尚未完成。当前未启用外部搜索、PDF / OCR 或可执行插件。
+          </p>
+          <p className="small">自研代码 Apache-2.0 · foliate-js MIT · 示例书 CC0</p>
+        </Modal>
+      )}
+      {toast && (
+        <div className="toast" role="status">
+          <span>{toast}</span>
+          <button className="icon-button" onClick={() => setToast('')} aria-label="关闭提示">
+            <X size={17} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}

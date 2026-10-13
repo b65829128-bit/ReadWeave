@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ReadWeave",
+  "version": "0.1.0-alpha.1",
+  "identifier": "app.readweave.reader",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ReadWeave · 让理解留在阅读里",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 760,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data: blob:; frame-src blob:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "shortDescription": "在原文旁理解，顺畅继续阅读",
+    "category": "Education",
+    "resources": {
+      "../LICENSE": "licenses/Apache-2.0.txt",
+      "../THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt"
+    },
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "android": {
+      "minSdkVersion": 31
+    }
+  }
+}

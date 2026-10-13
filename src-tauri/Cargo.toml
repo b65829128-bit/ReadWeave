@@ -1,0 +1,26 @@
+[package]
+name = "readweave"
+version = "0.1.0-alpha.1"
+description = "Local-first EPUB reader"
+authors = ["ReadWeave contributors"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.98"
+
+[lib]
+name = "readweave_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.38", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+futures-util = "0.3"
+sha2 = "0.10"
+

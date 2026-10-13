@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 1,
+  "id": "app.readweave.history",
+  "version": "0.1.0",
+  "type": "reading-action-pack",
+  "name": "历史阅读释义",
+  "hostApi": "1",
+  "description": "从时代背景、官职与人物关系理解原文。年代不明时先澄清，不把外部背景当成书内记载。",
+  "actions": [
+    {
+      "id": "explain-office",
+      "label": "解释这个官职",
+      "appliesTo": ["selection", "viewport"],
+      "promptTemplate": "结合当前段落的时期解释这个官职。不确定年代时说明并提出简短澄清。区分原文、背景知识与推断；没有外部检索来源时不虚构资料。"
+    },
+    {
+      "id": "relationships",
+      "label": "理清人物关系",
+      "appliesTo": ["selection", "viewport"],
+      "promptTemplate": "根据当前已提供的原文梳理人物关系。没有原文支持的关系明确标为不确定，避免透露当前阅读位置之后的情节。"
+    }
+  ]
+}

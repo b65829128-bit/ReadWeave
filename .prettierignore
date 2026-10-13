@@ -1,0 +1,10 @@
+node_modules/
+dist/
+target/
+src-tauri/
+src/vendor/foliate/
+.local/
+test-results/
+playwright-report/
+package-lock.json
+docs/product-plan-v0.3.zh-CN.md

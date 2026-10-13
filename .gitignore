@@ -1,0 +1,16 @@
+node_modules/
+dist/
+target/
+src-tauri/gen/
+.env
+.env.*
+!.env.example
+*.log
+playwright-report/
+test-results/
+.local/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+src-tauri/icons/ios/
+src-tauri/icons/icon.icns
