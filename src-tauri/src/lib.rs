@@ -10,6 +10,7 @@ mod database;
 mod reading;
 mod reading_commands;
 mod reading_models;
+mod startup;
 #[cfg(test)]
 mod test_support;
 use reading_commands::*;
@@ -286,21 +287,42 @@ fn completion_cancel(request_id: String, state: State<'_, AppState>) -> Result<(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .setup(|app| {
-            let data = app.path().app_data_dir()?;
-            let books = data.join("books");
-            std::fs::create_dir_all(&books)?;
-            let db = database::open_database(&data.join("readweave.sqlite3"))
-                .map_err(|e| std::io::Error::other(e.message))?;
-            let reading =
-                reading::ReadingCore::new(&db).map_err(|e| std::io::Error::other(e.message))?;
-            app.manage(AppState {
-                db: Mutex::new(db),
-                books,
-                requests: Mutex::new(HashMap::new()),
-                reading: Mutex::new(reading),
-            });
+            let initialize = || -> Result<(), startup::StartupError> {
+                let data = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|_| startup::StartupError {
+                        stage: "应用数据目录",
+                        code: "APP_DATA_UNAVAILABLE".into(),
+                        message: "无法确定应用的本地数据目录。",
+                    })?;
+                let books = data.join("books");
+                std::fs::create_dir_all(&books)
+                    .map_err(|error| startup::StartupError::io("书籍目录", error))?;
+                startup::check_writable(&data)?;
+                let db = database::open_database(&data.join("readweave.sqlite3"))
+                    .map_err(|error| startup::StartupError::core("数据库初始化", error))?;
+                let reading = reading::ReadingCore::new(&db)
+                    .map_err(|error| startup::StartupError::core("原生阅读服务", error))?;
+                app.manage(AppState {
+                    db: Mutex::new(db),
+                    books,
+                    requests: Mutex::new(HashMap::new()),
+                    reading: Mutex::new(reading),
+                });
+                let config = app.config().app.windows[0].clone();
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &config)
+                    .map_err(|error| startup::StartupError::webview(&error))?
+                    .build()
+                    .map_err(|error| startup::StartupError::webview(&error))?;
+                Ok(())
+            };
+            if let Err(error) = initialize() {
+                startup::show_failure(&error);
+                app.handle().exit(1);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -319,9 +341,15 @@ pub fn run() {
             reading_read,
             reading_revoke_task,
             reading_resolve_anchor
-        ])
-        .run(tauri::generate_context!())
-        .expect("ReadWeave failed to start");
+        ]);
+    match builder.build(tauri::generate_context!()) {
+        Ok(app) => app.run(|_, _| {}),
+        Err(error) => {
+            let mut failure = startup::StartupError::webview(&error);
+            failure.stage = "应用运行时初始化";
+            startup::show_failure(&failure);
+        }
+    }
 }
 
 #[cfg(test)]

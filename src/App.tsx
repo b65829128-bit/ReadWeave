@@ -1665,7 +1665,7 @@ export default function App() {
           <Brand />
           <p>在原文旁理解，顺畅继续阅读。</p>
           <p className="muted">
-            v0.1.0-alpha.4 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
+            v0.1.0-alpha.5 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
             foliate-js。正式目标为 Windows 11 与 Android 平板。
           </p>
           <div className="inline-notice">
