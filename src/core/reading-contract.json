@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "transformVersion": "epub-text-v2",
-  "maxBlocks": 50000,
+  "maxBlocks": 100000,
   "maxSections": 512,
   "maxTextUnits": 12582912,
   "maxBlockUnits": 2097152,

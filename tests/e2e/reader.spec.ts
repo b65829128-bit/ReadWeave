@@ -266,7 +266,7 @@ test('malicious EPUB cannot run scripts, set locators or make remote requests', 
   let chapter = strFromU8(files['EPUB/chapter-0.xhtml'])
   chapter = chapter.replace(
     '<body>',
-    '<body onload="parent.__epubExecuted = true"><script>parent.__epubExecuted = true</script><img src="https://evil.example/track"/><iframe src="https://evil.example/frame"/><style>@import "https://evil.example/css";</style><a href="javascript:parent.__epubExecuted=true">bad</a>',
+    '<body onload="parent.__epubExecuted = true"><script>parent.__epubExecuted = true</script><img src="https://evil.example/track"/><iframe src="https://evil.example/frame"/><style>@import "https://evil.example/css";</style><a href="java&NewLine;script:parent.__epubExecuted=true">bad</a><p>甲&nbsp;乙&mdash;兼容实体</p>',
   )
   files['EPUB/chapter-0.xhtml'] = strToU8(chapter)
   const upload = page.waitForEvent('filechooser')
@@ -289,6 +289,44 @@ test('malicious EPUB cannot run scripts, set locators or make remote requests', 
   expect(attempted).toEqual([])
   await expect(frame.locator('body')).not.toHaveAttribute('onload')
   await expect(frame.locator('img')).not.toHaveAttribute('src')
+  await expect(frame.locator('p').first()).toHaveText('甲\u00a0乙—兼容实体')
+})
+
+test('imports and reopens a book with more than fifty thousand paragraphs', async ({ page }) => {
+  test.setTimeout(90_000)
+  await boot(page)
+  const sections = 102
+  const files: Record<string, Uint8Array> = {
+    mimetype: strToU8('application/epub+zip'),
+    'META-INF/container.xml': strToU8(
+      '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+    ),
+    'EPUB/package.opf': strToU8(
+      `<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:readweave:large-regression</dc:identifier><dc:title>多段落兼容回归</dc:title><dc:language>zh-CN</dc:language></metadata><manifest>${Array.from({ length: sections }, (_, i) => `<item id="c${i}" href="chapter-${i}.xhtml" media-type="application/xhtml+xml"/>`).join('')}</manifest><spine>${Array.from({ length: sections }, (_, i) => `<itemref idref="c${i}"/>`).join('')}</spine></package>`,
+    ),
+  }
+  for (let section = 0; section < sections; section++)
+    files[`EPUB/chapter-${section}.xhtml`] = strToU8(
+      `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>第 ${section + 1} 节</title></head><body>${Array.from({ length: 500 }, (_, i) => `<p>这是第 ${section * 500 + i + 1} 段正文。</p>`).join('')}</body></html>`,
+    )
+  await page.locator('input[accept^=".epub"]').setInputFiles({
+    name: 'many-paragraphs.epub',
+    mimeType: 'application/epub+zip',
+    buffer: Buffer.from(zipSync(files)),
+  })
+  await expect(page.locator('.reader-header')).toContainText('多段落兼容回归', {
+    timeout: 60_000,
+  })
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  const frame = page.frames().find((item) => item.url().startsWith('blob:'))!
+  await expect(frame.locator('p').first()).toHaveText('这是第 1 段正文。')
+  await page.reload()
+  await expect(page.locator('.book-card')).toHaveCount(3)
+  await page.locator('.book-card').filter({ hasText: '多段落兼容回归' }).click()
+  await expect(page.locator('.reader-header')).toContainText('多段落兼容回归', {
+    timeout: 60_000,
+  })
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
 })
 
 test('portrait tablet keeps the reader usable with an adjustable bottom answer panel', async ({

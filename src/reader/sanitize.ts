@@ -12,13 +12,39 @@ export function cleanXmlDeclaration(source: string): string {
 export const BOOK_CSP =
   "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src blob: data:; font-src blob: data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'"
 
+export function normalizeHtmlEntities(source: string): string {
+  const xmlEntities = new Set(['amp', 'lt', 'gt', 'quot', 'apos'])
+  const decoded = new Map<string, string>()
+  const decoder = globalThis.document.createElement('span')
+  return source.replace(
+    /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|&([a-z][a-z0-9]+);/gi,
+    (entity: string, name: string | undefined) => {
+      if (!name || xmlEntities.has(name)) return entity
+      if (!decoded.has(entity)) {
+        // Only an entity token reaches the detached decoder, never publication markup or a DTD.
+        // Attribute parsing requires the complete name; text parsing also expands legacy prefixes.
+        decoder.innerHTML = `<span title="${entity}"></span>`
+        const value = decoder.firstElementChild!.getAttribute('title')!
+        decoded.set(
+          entity,
+          value === entity
+            ? entity
+            : [...value].map((character) => `&#${character.codePointAt(0)};`).join(''),
+        )
+      }
+      return decoded.get(entity)!
+    },
+  )
+}
+
 export function sanitizeXhtml(source: string): string {
-  if (source.length > 2 * 1024 * 1024) throw new Error('章节过大。')
+  if (source.length > 2 * 1024 * 1024) throw new Error('EPUB 单章文本超过 2 MiB 上限。')
   const document = new DOMParser().parseFromString(
-    cleanXmlDeclaration(source),
+    normalizeHtmlEntities(cleanXmlDeclaration(source)),
     'application/xhtml+xml',
   )
-  if (document.querySelector('parsererror')) throw new Error('EPUB 章节格式损坏。')
+  if (document.querySelector('parsererror'))
+    throw new Error('EPUB 章节结构无法解析，可能存在未闭合标签或不支持的实体。')
   const clean = DOMPurify.sanitize(document.documentElement, {
     WHOLE_DOCUMENT: true,
     RETURN_DOM: true,

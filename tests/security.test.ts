@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { crc32, inspectArchive, safeArchivePath } from '../src/reader/archive'
-import { sanitizeXhtml } from '../src/reader/sanitize'
+import { normalizeHtmlEntities, sanitizeXhtml } from '../src/reader/sanitize'
 import { defaultPack, parsePack, renderAction } from '../src/core/plugins'
 import { completionEndpoint, SseDecoder } from '../src/harness/provider'
 
@@ -47,6 +47,41 @@ describe('untrusted EPUB import', () => {
     expect(doc.querySelector('p')?.getAttribute('data-rw-paragraph')).toBe('0')
     expect(html).toContain("script-src 'none'")
     expect(doc.querySelector('p')?.textContent).toBe('中文😀é')
+  })
+  it('accepts standard HTML named entities without interpreting decoded text as markup', () => {
+    const html = sanitizeXhtml(
+      '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head><title>兼容书籍</title></head><body><p>甲&nbsp;乙&mdash;&hellip;&copy;&NotEqualTilde; &amp;nbsp; &lt;script&gt;alert(1)&lt;/script&gt;</p><a href="java&NewLine;script:alert(1)">链接</a></body></html>',
+    )
+    const doc = new DOMParser().parseFromString(html, 'application/xhtml+xml')
+    expect(doc.querySelector('parsererror')).toBeNull()
+    expect(doc.querySelector('p')?.textContent).toBe(
+      '甲\u00a0乙—…©≂̸ &nbsp; <script>alert(1)</script>',
+    )
+    expect(doc.querySelector('script')).toBeNull()
+    expect(doc.querySelector('a')?.getAttribute('href')).toBeNull()
+  })
+  it('does not rewrite entity-like literal text in CDATA, comments or processing instructions', () => {
+    const html = normalizeHtmlEntities(
+      '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>字面文本</title></head><body><!-- &unknownEntity; --><?note &unknownEntity;?><p><![CDATA[甲&nbsp;乙 &copy; &unknownEntity; <script>字面标签</script>]]></p></body></html>',
+    )
+    const doc = new DOMParser().parseFromString(html, 'application/xhtml+xml')
+    expect(doc.querySelector('parsererror')).toBeNull()
+    expect(doc.querySelector('p')?.textContent).toBe(
+      '甲&nbsp;乙 &copy; &unknownEntity; <script>字面标签</script>',
+    )
+    expect(doc.querySelector('script')).toBeNull()
+  })
+  it('still rejects custom XML entities, unknown entities and malformed chapter markup', () => {
+    for (const declaration of [
+      '<!DOCTYPE html [<!ENTITY secret SYSTEM "file:///private">]>',
+      '<!DOCTYPE html [<!ENTITY secret "expanded">]>',
+    ])
+      expect(() =>
+        sanitizeXhtml(`${declaration}<html><body><p>&secret;</p></body></html>`),
+      ).toThrow(/实体声明/)
+    for (const entity of ['&unknownEntity;', '&notAnEntity;', '&copyInvalid;'])
+      expect(() => sanitizeXhtml(`<html><body><p>${entity}</p></body></html>`)).toThrow(/无法解析/)
+    expect(() => sanitizeXhtml('<html><body><p>未闭合</body></html>')).toThrow(/无法解析/)
   })
 })
 

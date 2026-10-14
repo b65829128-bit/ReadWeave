@@ -131,6 +131,92 @@ fn code<T: std::fmt::Debug>(result: CoreResult<T>, expected: &str) {
 }
 
 #[test]
+fn large_books_fit_the_shared_block_budget_and_excess_is_rejected_atomically() {
+    let blocks: Vec<_> = (0..limits().max_blocks)
+        .map(|ordinal| block(ordinal / 500, ordinal, "大书的规范化正文。", "章节"))
+        .collect();
+    let mut f = Fixture::new(blocks);
+    assert_eq!(f.index.paragraphs, limits().max_blocks);
+    let mut excess = f.blocks.clone();
+    excess.push(block(
+        limits().max_blocks / 500,
+        limits().max_blocks,
+        "超出限额的正文。",
+        "章节",
+    ));
+    code(f.register(excess), "INVALID_ARGUMENT");
+    assert_eq!(
+        f.core
+            .index(&f.db, &f.index.book_id)
+            .unwrap()
+            .unwrap()
+            .content_hash,
+        f.index.content_hash
+    );
+    assert_eq!(
+        load_blocks(&f.db, &f.index.book_id).unwrap().len(),
+        f.blocks.len()
+    );
+}
+
+#[test]
+#[ignore = "requires a local, ignored READWEAVE_EPUB_ACCEPTANCE artifact; no books in the repository"]
+fn local_epub_registration_survives_restart() {
+    let artifact = std::env::var("READWEAVE_EPUB_ACCEPTANCE").unwrap();
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(artifact).unwrap()).unwrap();
+    let raw = std::fs::read(data["path"].as_str().unwrap()).unwrap();
+    let book_id = format!("{:x}", Sha256::digest(&raw));
+    let version = format!("sha256:{book_id}");
+    assert_eq!(data["record"]["id"].as_str().unwrap(), book_id);
+    assert_eq!(data["record"]["version"].as_str().unwrap(), version);
+    let paragraphs: Vec<Paragraph> = serde_json::from_value(data["paragraphs"].clone()).unwrap();
+    let count = paragraphs.len();
+    let characters: usize = paragraphs.iter().map(|block| units(&block.text)).sum();
+    let directory = TestDirectory::new();
+    let database_path = directory.path().join("local-acceptance.sqlite3");
+    std::fs::write(directory.path().join(format!("{book_id}.epub")), raw).unwrap();
+    let mut db = database::open_database(&database_path).unwrap();
+    db.execute(
+        "INSERT INTO records(collection,id,value) VALUES('books',?1,?2)",
+        params![book_id, serde_json::to_string(&data["record"]).unwrap()],
+    )
+    .unwrap();
+    let core = ReadingCore::new(&db).unwrap();
+    let index = core
+        .register(
+            &mut db,
+            directory.path(),
+            RegisterBook {
+                book_id: book_id.clone(),
+                book_version: version.clone(),
+                transform_version: limits().transform_version.clone(),
+                paragraphs,
+            },
+        )
+        .unwrap();
+    assert_eq!(index.paragraphs, count);
+    assert_eq!(index.characters, characters);
+    drop(core);
+    drop(db);
+    let db = database::open_database(&database_path).unwrap();
+    let core = ReadingCore::new(&db).unwrap();
+    let saved = core.index(&db, &book_id).unwrap().unwrap();
+    let blocks = load_blocks(&db, &book_id).unwrap();
+    assert_eq!(saved.paragraphs, count);
+    assert_eq!(saved.characters, characters);
+    assert_eq!(blocks.len(), count);
+    assert_eq!(
+        content_hash(&version, &limits().transform_version, &blocks).unwrap(),
+        index.content_hash
+    );
+    drop(core);
+    drop(db);
+    println!(
+        "Local native acceptance: {count} paragraphs, {characters} UTF-16 units; restart verified."
+    );
+}
+
+#[test]
 fn default_snapshot_and_every_tool_respect_the_frozen_utf16_boundary() {
     let mut f = Fixture::new(blocks());
     let task = f.create(ReadScope::ToPosition);

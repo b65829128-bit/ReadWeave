@@ -3,6 +3,7 @@ import * as CFI from '../vendor/foliate/epubcfi.js'
 import { EPUB_LIMITS, safeArchivePath } from './archive'
 import { cleanXmlDeclaration, normalizeText, sanitizeXhtml } from './sanitize'
 import { sha256 } from '../core/storage'
+import readingLimits from '../core/reading-contract.json'
 import { textRange } from './range'
 import type { BookRecord, Paragraph } from '../core/types'
 
@@ -84,8 +85,9 @@ export async function openEpub(
   try {
     if (book.rendition?.layout === 'pre-paginated')
       throw new Error('暂不支持固定版式 EPUB，请使用可重排版本。')
-    if (!book.sections.length || book.sections.length > 512)
-      throw new Error('EPUB 没有正文或章节数量过多。')
+    if (!book.sections.length) throw new Error('EPUB 没有可读取的正文。')
+    if (book.sections.length > readingLimits.maxSections)
+      throw new Error(`EPUB 章节数量超过 ${readingLimits.maxSections} 节上限。`)
     book.transformTarget.addEventListener('load', (event) => {
       const detail = (event as CustomEvent).detail
       if (
@@ -107,8 +109,12 @@ export async function openEpub(
       for (const element of doc.querySelectorAll('[data-rw-paragraph]')) {
         const text = normalizeText(element.textContent ?? '')
         characters += text.length
-        if (characters > 12 * 1024 * 1024 || paragraphs.length > 50_000)
-          throw new Error('书籍正文超过当前原型的处理上限。')
+        if (characters > readingLimits.maxTextUnits)
+          throw new Error('书籍正文超过当前可处理的文字总量。')
+        if (paragraphs.length >= readingLimits.maxBlocks)
+          throw new Error(
+            `书籍段落数量超过 ${readingLimits.maxBlocks.toLocaleString('zh-CN')} 段上限。`,
+          )
         const range = doc.createRange()
         range.selectNodeContents(element)
         paragraphs.push({
