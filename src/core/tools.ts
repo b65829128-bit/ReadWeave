@@ -253,6 +253,9 @@ export class ReadingTools {
   }
   revoke() {
     this.revoked = true
+    this.allowed.length = 0
+    this.refs.clear()
+    this.cursors.clear()
   }
   allEvidence(): Fragment[] {
     return [...this.citations.values()].map((item) => ({ ...item }))

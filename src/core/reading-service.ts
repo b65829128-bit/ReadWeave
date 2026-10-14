@@ -158,18 +158,20 @@ export const readingService = {
     signal?: AbortSignal,
   ): Promise<ReadingTask> {
     abortIfNeeded(signal)
+    const frozenPoint = structuredClone(point)
+    const frozenBook = { ...book }
     if (!isTauri()) return new PreviewReadingTask(new ReadingTools(book, paragraphs, point, scope))
-    const index = await this.register(book, paragraphs)
+    const index = await this.register(frozenBook, paragraphs)
     abortIfNeeded(signal)
-    if (!index || index.bookId !== book.id || index.bookVersion !== book.version)
+    if (!index || index.bookId !== frozenBook.id || index.bookVersion !== frozenBook.version)
       throw new Error('正文登记结果与当前书籍不一致。')
     const handle = await nativeCall<{ runId: string; snapshot: Snapshot }>('reading_create_task', {
       request: {
-        bookId: book.id,
-        bookVersion: book.version,
+        bookId: frozenBook.id,
+        bookVersion: frozenBook.version,
         transformVersion: index.transformVersion,
         contentHash: index.contentHash,
-        point,
+        point: frozenPoint,
         scope,
       },
     })
@@ -179,8 +181,8 @@ export const readingService = {
       abortIfNeeded(signal)
     }
     if (
-      task.snapshot.bookId !== book.id ||
-      task.snapshot.bookVersion !== book.version ||
+      task.snapshot.bookId !== frozenBook.id ||
+      task.snapshot.bookVersion !== frozenBook.version ||
       task.snapshot.transformVersion !== index.transformVersion ||
       task.snapshot.contentHash !== index.contentHash ||
       task.snapshot.scope !== scope

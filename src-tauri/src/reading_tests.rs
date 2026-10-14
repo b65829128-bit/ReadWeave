@@ -623,3 +623,32 @@ fn live_grants_are_bounded_and_revocation_frees_capacity() {
     f.core.revoke(CALLER, &tasks[0].run_id).unwrap();
     assert!(f.try_create(f.point(1, 2), ReadScope::Book).is_ok());
 }
+
+#[test]
+fn repeated_preview_cancellation_releases_text_and_bounds_inactive_grants() {
+    let mut f = Fixture::new(blocks());
+    let mut oldest = String::new();
+    for i in 0..limits().max_active_tasks * 3 {
+        let task = f.create(ReadScope::Book);
+        if i == 0 {
+            oldest = task.run_id.clone();
+        }
+        f.core.revoke(CALLER, &task.run_id).unwrap();
+        let grant = &f.core.grants[&task.run_id];
+        assert!(grant.allowed.is_empty() && grant.refs.is_empty() && grant.cursors.is_empty());
+        assert!(grant.snapshot.initial.is_empty() && grant.snapshot.selection.is_empty());
+        assert!(f.core.grants.len() <= limits().max_active_tasks * 2);
+        assert!(f
+            .core
+            .resolve(
+                &f.db,
+                CALLER,
+                &f.index.book_id,
+                &f.index.book_version,
+                &task.snapshot.initial[0].anchor_ref
+            )
+            .unwrap()
+            .is_some());
+    }
+    code(f.search(&oldest, json!({"query":"中"})), "RUN_NOT_FOUND");
+}

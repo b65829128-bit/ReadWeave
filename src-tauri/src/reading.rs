@@ -307,6 +307,9 @@ impl ReadingCore {
             return Err(error("TRANSFORM_MISMATCH"));
         }
         self.grants.retain(|_, grant| {
+            if grant.started.elapsed() > Duration::from_millis(limits().ttl_ms) {
+                grant.release_text();
+            }
             grant.started.elapsed() < Duration::from_millis(limits().ttl_ms * 2)
         });
         if self
@@ -317,6 +320,21 @@ impl ReadingCore {
             >= limits().max_active_tasks
         {
             return Err(error("RUN_LIMIT"));
+        }
+        while self.grants.len() >= limits().max_active_tasks * 2 {
+            let oldest = self
+                .grants
+                .iter()
+                .filter(|(_, g)| {
+                    g.revoked || g.started.elapsed() > Duration::from_millis(limits().ttl_ms)
+                })
+                .min_by_key(|(_, g)| g.started)
+                .map(|(id, _)| id.clone());
+            if let Some(id) = oldest {
+                self.grants.remove(&id);
+            } else {
+                break;
+            }
         }
         let blocks = load_blocks(db, &request.book_id)?;
         if blocks.len() != index.paragraphs
@@ -460,6 +478,7 @@ impl ReadingCore {
             return Err(error("RUN_REVOKED"));
         }
         if grant.started.elapsed() > Duration::from_millis(limits().ttl_ms) {
+            grant.release_text();
             return Err(error("RUN_EXPIRED"));
         }
         book_title(db, &grant.snapshot.book_id, &grant.snapshot.book_version)?;
@@ -600,6 +619,7 @@ impl ReadingCore {
             return Err(error("CALLER_MISMATCH"));
         }
         grant.revoked = true;
+        grant.release_text();
         Ok(())
     }
 
@@ -642,6 +662,14 @@ impl ReadingCore {
 mod tests;
 
 impl Grant {
+    fn release_text(&mut self) {
+        self.allowed = Vec::new();
+        self.refs = HashMap::new();
+        self.cursors = HashMap::new();
+        self.evidence = Vec::new();
+        self.snapshot.initial = Vec::new();
+        self.snapshot.selection = String::new();
+    }
     fn prepare(&self, specs: Vec<Spec>) -> CoreResult<Vec<Issued>> {
         specs
             .into_iter()

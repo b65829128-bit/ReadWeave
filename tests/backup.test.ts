@@ -3,6 +3,7 @@ import { backupSchema, modelSettingsSchema, parseBackup, restoreBackup } from '.
 import { defaultModel, defaultPreferences } from '../src/core/types'
 import { defaultPack } from '../src/core/plugins'
 import { sha256, storage } from '../src/core/storage'
+import contract from '../src/core/reading-contract.json'
 
 vi.mock('../src/core/storage', () => ({
   sha256: vi.fn(async () => 'a'.repeat(64)),
@@ -68,6 +69,48 @@ describe('versioned backups', () => {
       { ...valid(), books: [{ ...book, version: `sha256:${'b'.repeat(64)}` }] },
     ])
       expect(() => parseBackup(JSON.stringify(backup))).toThrow()
+  })
+  it('preserves native source revisions and still accepts old snapshots without them', () => {
+    const snapshot = {
+      id: 'snap_1',
+      bookId: book.id,
+      bookVersion: book.version,
+      bookTitle: book.title,
+      chapter: '第一章',
+      createdAt: '2026-10-14T00:00:00.123456789Z',
+      scope: 'to-position',
+      locator: {
+        cfi: 'epubcfi(/6/2!/4/2)',
+        sectionIndex: 0,
+        paragraphId: 'p_0_0',
+        endOffset: 2,
+        progress: 0.2,
+      },
+      selection: '原文',
+      initial: [],
+    }
+    const conversation = {
+      id: 'conversation_1',
+      bookId: book.id,
+      snapshot,
+      messages: [],
+      evidence: [],
+      createdAt: snapshot.createdAt,
+    }
+    expect(
+      parseBackup(JSON.stringify({ ...valid(), conversations: [conversation] })).conversations[0]
+        .snapshot.transformVersion,
+    ).toBeUndefined()
+    const native = {
+      ...snapshot,
+      transformVersion: contract.transformVersion,
+      contentHash: 'b'.repeat(64),
+    }
+    const parsed = parseBackup(
+      JSON.stringify({ ...valid(), conversations: [{ ...conversation, snapshot: native }] }),
+    )
+    expect(parsed.conversations[0].snapshot).toEqual(native)
+    expect(JSON.stringify(parsed)).not.toMatch(/device_id|caller_id|run_id|apiKey/)
   })
   it('rejects duplicates and an action-pack identity mismatch before any writes', () => {
     expect(backupSchema.safeParse({ ...valid(), books: [book, book] }).success).toBe(false)

@@ -171,6 +171,25 @@ describe('asynchronous native reading bridge', () => {
     await rejection
     expect(invoked('reading_create_task')).toHaveLength(0)
   })
+  it('captures the book and position before asynchronous registration finishes', async () => {
+    const pending = deferred<typeof index>()
+    bridge.invoke.mockReturnValueOnce(pending.promise)
+    const sourceBook = structuredClone(book)
+    const location = structuredClone(point)
+    const creation = readingService.create(sourceBook, blocks(), location, 'to-position')
+    sourceBook.id = 'c'.repeat(64)
+    sourceBook.version = `sha256:${sourceBook.id}`
+    location.locator.endOffset = 100
+    location.text = 'later page'
+    pending.resolve(index)
+    const task = await creation
+    expect(task.snapshot.bookId).toBe(book.id)
+    expect(invoked('reading_create_task')[0][1].request).toMatchObject({
+      bookId: book.id,
+      bookVersion: book.version,
+      point,
+    })
+  })
 
   it('revokes a grant that arrives after the preparation was cancelled', async () => {
     const pending = deferred<ReturnType<typeof handle>>()
