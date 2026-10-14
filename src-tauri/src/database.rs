@@ -1,5 +1,5 @@
 use crate::reading_models::{error, opaque, CoreResult};
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
 pub const DATABASE_VERSION: u32 = 2;
@@ -42,13 +42,15 @@ pub fn open_database(path: &Path) -> CoreResult<Connection> {
 }
 
 pub fn migrate(db: &mut Connection) -> CoreResult<()> {
-    let version: u32 = db
+    let tx = db
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| error("STORAGE_FAILED"))?;
+    let version: u32 = tx
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|_| error("STORAGE_FAILED"))?;
     if version > DATABASE_VERSION {
         return Err(error("SCHEMA_TOO_NEW"));
     }
-    let tx = db.transaction().map_err(|_| error("STORAGE_FAILED"))?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(collection,id));
         CREATE TABLE IF NOT EXISTS reading_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reading_books (book_id TEXT PRIMARY KEY, book_version TEXT NOT NULL, transform_version TEXT NOT NULL, content_hash TEXT NOT NULL, block_count INTEGER NOT NULL, utf16_units INTEGER NOT NULL);
@@ -56,7 +58,9 @@ pub fn migrate(db: &mut Connection) -> CoreResult<()> {
         CREATE INDEX IF NOT EXISTS reading_blocks_order ON reading_blocks(book_id,ordinal);
         CREATE TABLE IF NOT EXISTS reading_snapshots (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, device_id TEXT NOT NULL, caller_id TEXT NOT NULL, book_id TEXT NOT NULL, book_version TEXT NOT NULL, transform_version TEXT NOT NULL, content_hash TEXT NOT NULL, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reading_evidence (anchor_ref TEXT PRIMARY KEY, citation_id TEXT NOT NULL UNIQUE, snapshot_id TEXT NOT NULL, device_id TEXT NOT NULL, caller_id TEXT NOT NULL, book_id TEXT NOT NULL, book_version TEXT NOT NULL, transform_version TEXT NOT NULL, content_hash TEXT NOT NULL, fragment TEXT NOT NULL, locator TEXT NOT NULL, FOREIGN KEY(snapshot_id) REFERENCES reading_snapshots(id));
-        PRAGMA user_version=2;").map_err(|_| error("STORAGE_FAILED"))?;
+        ").map_err(|_| error("STORAGE_FAILED"))?;
+    tx.pragma_update(None, "user_version", DATABASE_VERSION)
+        .map_err(|_| error("STORAGE_FAILED"))?;
     tx.commit().map_err(|_| error("STORAGE_FAILED"))
 }
 
@@ -190,6 +194,48 @@ mod tests {
             "keep"
         );
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn migration_rechecks_version_after_waiting_for_a_concurrent_writer() {
+        let directory = TestDirectory::new();
+        let path = directory.path().join("concurrent.sqlite3");
+        let mut writer = Connection::open(&path).unwrap();
+        writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA user_version=1; CREATE TABLE records(collection TEXT,id TEXT,value TEXT); INSERT INTO records VALUES('annotations','note','keep');").unwrap();
+        let future = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        future.pragma_update(None, "user_version", 99).unwrap();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (completed, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut db = Connection::open(path).unwrap();
+            db.busy_timeout(Duration::from_secs(5)).unwrap();
+            started.send(()).unwrap();
+            completed.send(migrate(&mut db)).unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            result.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        future.commit().unwrap();
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap_err()
+                .code,
+            "SCHEMA_TOO_NEW"
+        );
+        worker.join().unwrap();
+        assert_eq!(
+            writer
+                .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            99
+        );
+        assert_eq!(records(&writer)[0].2, "keep");
     }
 
     #[test]

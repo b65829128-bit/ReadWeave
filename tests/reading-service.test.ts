@@ -244,21 +244,38 @@ describe('asynchronous native reading bridge', () => {
   })
 
   it('resolves saved native anchors without recreating a reading grant', async () => {
-    expect(await readingService.resolveAnchor(book.id, book.version, 'anchor_1')).toEqual(
+    expect(await readingService.resolveAnchor(book.id, book.version, fragment())).toEqual(
       point.locator,
     )
     expect(invoked('reading_resolve_anchor')[0][1]).toEqual({
       bookId: book.id,
       bookVersion: book.version,
-      anchorRef: 'anchor_1',
+      fragment: fragment(),
     })
     expect(invoked('reading_create_task')).toHaveLength(0)
     bridge.invoke.mockRejectedValueOnce({ code: 'ANCHOR_STALE', message: '旧定位' })
-    expect(await readingService.resolveAnchor(book.id, book.version, 'old_anchor')).toBeNull()
+    expect(await readingService.resolveAnchor(book.id, book.version, fragment('old'))).toBeNull()
     bridge.invoke.mockRejectedValueOnce({ code: 'CALLER_MISMATCH', message: '错误身份' })
     await expect(
-      readingService.resolveAnchor(book.id, book.version, 'foreign'),
+      readingService.resolveAnchor(book.id, book.version, fragment('foreign')),
     ).rejects.toMatchObject({ code: 'CALLER_MISMATCH' })
+    bridge.invoke.mockRejectedValueOnce({ code: 'EVIDENCE_MISMATCH', message: '引用不一致' })
+    await expect(
+      readingService.resolveAnchor(book.id, book.version, { ...fragment(), text: 'forged' }),
+    ).rejects.toMatchObject({ code: 'EVIDENCE_MISMATCH' })
+  })
+
+  it('does not let a changed preview or restored fragment replace issued evidence', async () => {
+    bridge.native = false
+    const task = await readingService.create(book, blocks(), point, 'to-position')
+    const original = structuredClone(task.snapshot.initial[0])
+    task.snapshot.initial[0].text = 'forged'
+    expect(task.allEvidence()[0].text).toBe(original.text)
+    await expect(task.resolveAnchor(task.snapshot.initial[0])).rejects.toMatchObject({
+      code: 'EVIDENCE_MISMATCH',
+    })
+    await task.revoke()
+    expect(await task.resolveAnchor(original)).toMatchObject({ paragraphId: 'p_0_0', endOffset: 4 })
   })
 
   it('uses the same asynchronous task interface for browser development preview', async () => {
@@ -269,7 +286,7 @@ describe('asynchronous native reading bridge', () => {
     expect((await task.read({ ref: task.snapshot.initial[0].ref })).fragments[0].text).toBe(
       '中文😀',
     )
-    expect(await task.resolveAnchor(task.snapshot.initial[0].anchorRef)).toMatchObject({
+    expect(await task.resolveAnchor(task.snapshot.initial[0])).toMatchObject({
       paragraphId: 'p_0_0',
     })
     await task.revoke()

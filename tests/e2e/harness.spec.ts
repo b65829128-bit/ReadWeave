@@ -173,7 +173,7 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
   expect(remoteRequests).toEqual([])
   expect(await page.evaluate(() => '__aiExecuted' in window)).toBe(false)
   await page.getByRole('button', { name: '原文', exact: true }).click()
-  await expect(page.getByRole('dialog')).toContainText('实际提供的原文')
+  await expect(page.getByRole('dialog')).toContainText('保存的原文片段')
   await page.getByRole('button', { name: '定位原文' }).click()
   await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('追问：用自己的话再说一次。')
   await page.getByRole('button', { name: '发送问题' }).click()

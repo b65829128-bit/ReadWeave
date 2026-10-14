@@ -22,6 +22,7 @@ pub fn error(code: &'static str) -> CoreError {
         "BUDGET_EXCEEDED" => "已达到本轮取证上限。请基于已有原文回答。",
         "INVALID_REFERENCE" => "引用或游标不属于本次任务。",
         "ANCHOR_STALE" => "引用定位资料已失效，请核对对应的书籍版本。",
+        "EVIDENCE_MISMATCH" => "引用内容与已保存的原文记录不一致，请核对备份。",
         "SCHEMA_TOO_NEW" => "数据库由更新版本创建，请使用相应版本打开。",
         "MIGRATION_BACKUP_FAILED" => "升级前备份失败，数据库升级已停止。",
         "STORAGE_FAILED" => "原文或引用保存失败，请检查设备存储。",

@@ -104,7 +104,7 @@ describe('frozen, scoped reading grants', () => {
     const fragment = tools.search({ query: 'abc' }).fragments[0]
     expect(fragment.text).toBe(text.slice(0, 1000))
     expect(fragment.text).toContain('ABC')
-    expect(tools.resolveAnchor(fragment.anchorRef)).toMatchObject({
+    expect(tools.resolveAnchor(fragment)).toMatchObject({
       paragraphId: 'p_0_0',
       endOffset: 1000,
       quote: { exact: fragment.text.slice(0, 240) },

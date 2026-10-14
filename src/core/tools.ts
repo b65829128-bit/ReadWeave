@@ -41,6 +41,7 @@ export type ToolErrorCode =
   | 'RUN_NOT_FOUND'
   | 'RUN_LIMIT'
   | 'ANCHOR_STALE'
+  | 'EVIDENCE_MISMATCH'
   | 'STORAGE_FAILED'
 export class ReadingToolError extends Error {
   constructor(
@@ -162,7 +163,7 @@ export class ReadingTools {
       progress: 0,
       quote: { exact: textSlice(text, 0, 240).text, prefix: '', suffix: '' },
     })
-    this.citations.set(fragment.citationId, fragment)
+    this.citations.set(fragment.citationId, { ...fragment })
     return fragment
   }
   private result(
@@ -260,9 +261,22 @@ export class ReadingTools {
   allEvidence(): Fragment[] {
     return [...this.citations.values()].map((item) => ({ ...item }))
   }
-  resolveAnchor(anchor: string): Locator | null {
-    const locator = this.anchors.get(anchor)
-    return locator ? structuredClone(locator) : null
+  resolveAnchor(fragment: Fragment): Locator | null {
+    const locator = this.anchors.get(fragment.anchorRef)
+    if (!locator) return null
+    const issued = this.citations.get(fragment.citationId)
+    if (
+      !issued ||
+      issued.anchorRef !== fragment.anchorRef ||
+      issued.ref !== fragment.ref ||
+      issued.text !== fragment.text ||
+      issued.label !== fragment.label
+    )
+      throw new ReadingToolError(
+        'EVIDENCE_MISMATCH',
+        '引用内容与已保存的原文记录不一致，请核对备份。',
+      )
+    return structuredClone(locator)
   }
 }
 

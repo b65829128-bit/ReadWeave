@@ -19,7 +19,7 @@ export interface ReadingTask {
   read(input: unknown): Promise<ToolResult>
   revoke(): Promise<void>
   allEvidence(): Fragment[]
-  resolveAnchor(anchor: string): Promise<Locator | null>
+  resolveAnchor(fragment: Fragment): Promise<Locator | null>
 }
 export interface BookIndex {
   bookId: string
@@ -70,8 +70,8 @@ export class PreviewReadingTask implements ReadingTask {
   allEvidence() {
     return this.tools.allEvidence()
   }
-  async resolveAnchor(anchor: string) {
-    return this.tools.resolveAnchor(anchor)
+  async resolveAnchor(fragment: Fragment) {
+    return this.tools.resolveAnchor(fragment)
   }
 }
 class NativeReadingTask implements ReadingTask {
@@ -112,8 +112,8 @@ class NativeReadingTask implements ReadingTask {
   allEvidence() {
     return structuredClone(this.evidence)
   }
-  resolveAnchor(anchor: string) {
-    return readingService.resolveAnchor(this.snapshot.bookId, this.snapshot.bookVersion, anchor)
+  resolveAnchor(fragment: Fragment) {
+    return readingService.resolveAnchor(this.snapshot.bookId, this.snapshot.bookVersion, fragment)
   }
 }
 
@@ -195,14 +195,14 @@ export const readingService = {
   async resolveAnchor(
     bookId: string,
     bookVersion: string,
-    anchorRef: string,
+    fragment: Fragment,
   ): Promise<Locator | null> {
     if (!isTauri()) return null
     try {
       return await nativeCall<Locator | null>('reading_resolve_anchor', {
         bookId,
         bookVersion,
-        anchorRef,
+        fragment,
       })
     } catch (error) {
       if (error instanceof ReadingToolError && error.code === 'ANCHOR_STALE') return null

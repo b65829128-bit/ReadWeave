@@ -193,7 +193,7 @@ fn reindexing_does_not_change_live_grants_and_corrupt_cache_is_rebuilt() {
             CALLER,
             &f.index.book_id,
             &f.index.book_version,
-            &original.anchor_ref,
+            &original,
         ),
         "ANCHOR_STALE",
     );
@@ -499,7 +499,7 @@ fn revoked_expired_and_restarted_runs_cannot_read_but_evidence_survives_restart(
         f.search(&revoked.run_id, json!({"query":"丞相"})),
         "RUN_NOT_FOUND",
     );
-    let anchor = &revoked.snapshot.initial[0].anchor_ref;
+    let anchor = &revoked.snapshot.initial[0];
     let locator = f
         .core
         .resolve(
@@ -522,6 +522,10 @@ fn revoked_expired_and_restarted_runs_cannot_read_but_evidence_survives_restart(
         ),
         "CALLER_MISMATCH",
     );
+    let legacy = Fragment {
+        anchor_ref: "legacy_anchor".into(),
+        ..anchor.clone()
+    };
     assert!(f
         .core
         .resolve(
@@ -529,7 +533,7 @@ fn revoked_expired_and_restarted_runs_cannot_read_but_evidence_survives_restart(
             CALLER,
             &f.index.book_id,
             &f.index.book_version,
-            "legacy_anchor"
+            &legacy
         )
         .unwrap()
         .is_none());
@@ -568,7 +572,7 @@ fn identical_quotes_have_distinct_host_issued_persistent_locations() {
                 CALLER,
                 &f.index.book_id,
                 &f.index.book_version,
-                &fragment.anchor_ref,
+                fragment,
             )
             .unwrap()
             .unwrap();
@@ -578,6 +582,45 @@ fn identical_quotes_have_distinct_host_issued_persistent_locations() {
         assert!(!serialized.contains("epubcfi"));
         assert!(serialized.contains("\"ref\":"));
     }
+}
+
+#[test]
+fn restored_evidence_must_match_the_native_record_before_resolving() {
+    let mut f = Fixture::new(blocks());
+    let task = f.create(ReadScope::ToPosition);
+    let original = task.snapshot.initial[0].clone();
+    f.core.revoke(CALLER, &task.run_id).unwrap();
+    f.core = ReadingCore::new(&f.db).unwrap();
+    for field in 0..4 {
+        let mut forged = original.clone();
+        match field {
+            0 => forged.text = "虚构原文".into(),
+            1 => forged.citation_id = "cite_other".into(),
+            2 => forged.r#ref = "passage_other".into(),
+            _ => forged.label = "伪造章节".into(),
+        }
+        code(
+            f.core.resolve(
+                &f.db,
+                CALLER,
+                &f.index.book_id,
+                &f.index.book_version,
+                &forged,
+            ),
+            "EVIDENCE_MISMATCH",
+        );
+    }
+    assert!(f
+        .core
+        .resolve(
+            &f.db,
+            CALLER,
+            &f.index.book_id,
+            &f.index.book_version,
+            &original
+        )
+        .unwrap()
+        .is_some());
 }
 
 #[test]
@@ -645,7 +688,7 @@ fn repeated_preview_cancellation_releases_text_and_bounds_inactive_grants() {
                 CALLER,
                 &f.index.book_id,
                 &f.index.book_version,
-                &task.snapshot.initial[0].anchor_ref
+                &task.snapshot.initial[0]
             )
             .unwrap()
             .is_some());

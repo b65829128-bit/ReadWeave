@@ -87,7 +87,7 @@ pub async fn reading_resolve_anchor(
     window: WebviewWindow,
     book_id: String,
     book_version: String,
-    anchor_ref: String,
+    fragment: Fragment,
     state: State<'_, AppState>,
 ) -> CoreResult<Option<Locator>> {
     let caller = caller(&window)?;
@@ -96,5 +96,5 @@ pub async fn reading_resolve_anchor(
         .lock()
         .map_err(|_| error("SERVICE_UNAVAILABLE"))?;
     let db = state.db.lock().map_err(|_| error("STORAGE_FAILED"))?;
-    core.resolve(&db, caller, &book_id, &book_version, &anchor_ref)
+    core.resolve(&db, caller, &book_id, &book_version, &fragment)
 }

@@ -766,12 +766,8 @@ export default function App() {
       let locator =
         activeTools.current?.snapshot.bookId === record.id &&
         activeTools.current.snapshot.bookVersion === record.version
-          ? await activeTools.current.resolveAnchor(citation.fragment.anchorRef)
-          : await readingService.resolveAnchor(
-              record.id,
-              record.version,
-              citation.fragment.anchorRef,
-            )
+          ? await activeTools.current.resolveAnchor(citation.fragment)
+          : await readingService.resolveAnchor(record.id, record.version, citation.fragment)
       if (!locator) {
         const matches = target.paragraphs.filter((p) => p.text.includes(citation.fragment.text))
         if (matches.length !== 1)
@@ -1579,11 +1575,11 @@ export default function App() {
         </Modal>
       )}
       {citation && (
-        <Modal title="回到实际提供的原文" onClose={() => setCitation(null)}>
+        <Modal title="保存的原文片段" onClose={() => setCitation(null)}>
           <p className="section-eyebrow">{citation.fragment.label}</p>
           <blockquote className="citation-source">{citation.fragment.text}</blockquote>
           <p className="small muted">
-            此处展示实际传给模型的文字。定位成功只核验来源，不保证解释正确。
+            此处展示随回答保存的片段。定位时会核对原文；定位成功不保证解释正确。
           </p>
           <div className="modal-footer">
             <button className="button" onClick={() => setCitation(null)}>
@@ -1669,7 +1665,7 @@ export default function App() {
           <Brand />
           <p>在原文旁理解，顺畅继续阅读。</p>
           <p className="muted">
-            v0.1.0-alpha.2 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
+            v0.1.0-alpha.3 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
             foliate-js。正式目标为 Windows 11 与 Android 平板。
           </p>
           <div className="inline-notice">

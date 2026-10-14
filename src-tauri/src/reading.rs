@@ -629,13 +629,30 @@ impl ReadingCore {
         caller: &str,
         book_id: &str,
         book_version: &str,
-        anchor: &str,
+        expected: &Fragment,
     ) -> CoreResult<Option<Locator>> {
         book_title(db, book_id, book_version)?;
-        type StoredAnchor = (String, String, String, String, String, String, String);
-        let stored: Option<StoredAnchor> = storage(db.query_row("SELECT device_id,caller_id,book_id,book_version,transform_version,content_hash,locator FROM reading_evidence WHERE anchor_ref=?1", [anchor], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional())?;
-        let Some((device, owner, original_book, original_version, transform, hash, locator)) =
-            stored
+        type StoredAnchor = (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        );
+        let stored: Option<StoredAnchor> = storage(db.query_row("SELECT device_id,caller_id,book_id,book_version,transform_version,content_hash,fragment,locator FROM reading_evidence WHERE anchor_ref=?1", [&expected.anchor_ref], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional())?;
+        let Some((
+            device,
+            owner,
+            original_book,
+            original_version,
+            transform,
+            hash,
+            fragment,
+            locator,
+        )) = stored
         else {
             return Ok(None);
         };
@@ -644,6 +661,11 @@ impl ReadingCore {
         }
         if original_book != book_id || original_version != book_version {
             return Err(error("BOOK_VERSION_MISMATCH"));
+        }
+        let issued: Fragment =
+            serde_json::from_str(&fragment).map_err(|_| error("STORAGE_FAILED"))?;
+        if &issued != expected {
+            return Err(error("EVIDENCE_MISMATCH"));
         }
         if !self
             .index(db, book_id)?
