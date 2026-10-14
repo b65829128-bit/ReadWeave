@@ -6,10 +6,19 @@ use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
 use tauri::{ipc::Channel, Manager, State};
 use tokio::sync::watch;
 
+mod database;
+mod reading;
+mod reading_commands;
+mod reading_models;
+#[cfg(test)]
+mod test_support;
+use reading_commands::*;
+
 struct AppState {
     db: Mutex<Connection>,
     books: PathBuf,
     requests: Mutex<HashMap<String, watch::Sender<bool>>>,
+    reading: Mutex<reading::ReadingCore>,
 }
 
 fn check_collection(collection: &str) -> Result<(), String> {
@@ -277,16 +286,42 @@ fn completion_cancel(request_id: String, state: State<'_, AppState>) -> Result<(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default().setup(|app| {
-        let data = app.path().app_data_dir()?;
-        let books = data.join("books");
-        std::fs::create_dir_all(&books)?;
-        let db = Connection::open(data.join("readweave.sqlite3"))?;
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(collection,id)); PRAGMA user_version=1;")?;
-        app.manage(AppState { db: Mutex::new(db), books, requests: Mutex::new(HashMap::new()) });
-        Ok(())
-    }).invoke_handler(tauri::generate_handler![records_list, record_get, record_put, record_delete, records_merge, book_blob_put, book_blob_get, completion_stream, completion_cancel])
-      .run(tauri::generate_context!()).expect("ReadWeave failed to start");
+    tauri::Builder::default()
+        .setup(|app| {
+            let data = app.path().app_data_dir()?;
+            let books = data.join("books");
+            std::fs::create_dir_all(&books)?;
+            let db = database::open_database(&data.join("readweave.sqlite3"))
+                .map_err(|e| std::io::Error::other(e.message))?;
+            let reading =
+                reading::ReadingCore::new(&db).map_err(|e| std::io::Error::other(e.message))?;
+            app.manage(AppState {
+                db: Mutex::new(db),
+                books,
+                requests: Mutex::new(HashMap::new()),
+                reading: Mutex::new(reading),
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            records_list,
+            record_get,
+            record_put,
+            record_delete,
+            records_merge,
+            book_blob_put,
+            book_blob_get,
+            completion_stream,
+            completion_cancel,
+            reading_register_book,
+            reading_create_task,
+            reading_search,
+            reading_read,
+            reading_revoke_task,
+            reading_resolve_anchor
+        ])
+        .run(tauri::generate_context!())
+        .expect("ReadWeave failed to start");
 }
 
 #[cfg(test)]

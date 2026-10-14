@@ -2574,6 +2574,7 @@ name = "readweave"
 version = "0.1.0-alpha.2"
 dependencies = [
  "futures-util",
+ "getrandom 0.4.3",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
@@ -2581,6 +2582,7 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
+ "time",
  "tokio",
 ]
 
