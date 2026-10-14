@@ -35,4 +35,5 @@ export interface ReaderAdapter {
   next(): Promise<void>
   setPreferences(preferences: Preferences): void
   getParagraphs(): readonly Paragraph[]
+  clearSelection(): void
 }

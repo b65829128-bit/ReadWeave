@@ -16,6 +16,7 @@ import { useEffect, useRef } from 'react'
 import type { Conversation, Fragment, Message, ReadingPoint } from '../core/types'
 import type { ReadingAction } from '../core/plugins'
 import { Answer } from './Answer'
+import { ModelActivity } from './ModelActivity'
 
 interface Props {
   selection: ReadingPoint | null
@@ -137,6 +138,7 @@ export function AssistantPanel(props: Props) {
                         <Sparkles size={14} />
                         一起理解
                       </div>
+                      <ModelActivity message={message} />
                       {message.content && (
                         <Answer
                           text={message.content}

@@ -1,9 +1,21 @@
 import { test, expect, type Page } from '@playwright/test'
 import { createServer, type ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
+import { parseBackup } from '../../src/core/backup'
 
-type ApiMessage = { role: string; content: string | null }
-type ApiBody = { messages: ApiMessage[]; model: string }
+type ApiMessage = {
+  role: string
+  content: string | null
+  reasoning_content?: string
+  tool_calls?: unknown[]
+}
+type ApiBody = {
+  messages: ApiMessage[]
+  model: string
+  thinking?: { type: string }
+  reasoning_effort?: string
+  max_tokens: number
+}
 const requests: ApiBody[] = []
 const connections = new Set<ServerResponse>()
 let endpoint = ''
@@ -26,6 +38,8 @@ const server = createServer(async (request, response) => {
   const write = (delta: unknown) =>
     response.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`)
   const question = body.messages.filter((message) => message.role === 'user').at(-1)?.content ?? ''
+  if (body.thinking?.type === 'enabled')
+    write({ reasoning_content: '先核对当前阅读范围，再寻找书内证据。' })
   if (question.includes('取消测试')) {
     write({ content: '第一段尚未结束。' })
     const timer = setInterval(() => {
@@ -108,7 +122,9 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
   await expect(page.locator('.reader-loading')).toHaveCount(0)
   await page.getByRole('button', { name: '模型设置' }).click()
   await page.getByRole('textbox', { name: '服务地址' }).fill(endpoint)
-  await page.getByRole('textbox', { name: '模型名称' }).fill('fixture-model')
+  await page.getByLabel('模型名称', { exact: true }).fill('fixture-model')
+  await page.getByLabel('思考强度', { exact: true }).selectOption('max')
+  await page.getByLabel('单次输出预算', { exact: true }).selectOption('16384')
   await page.getByLabel('服务密钥', { exact: true }).fill('ephemeral-test-secret')
   await page.getByRole('button', { name: '保存设置' }).click()
   const frame = page.frames().find((frame) => frame.url().startsWith('blob:'))!
@@ -136,6 +152,24 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
   expect(context.selection).toBe(selected)
   expect(JSON.stringify(requests[0])).not.toContain('想象你正在读一部历史书')
   expect(requests[1].messages.some((message) => message.role === 'tool')).toBe(true)
+  expect(requests[0].thinking).toEqual({ type: 'enabled' })
+  expect(requests[0].reasoning_effort).toBe('max')
+  expect(requests[0].max_tokens).toBe(16384)
+  expect(
+    requests[1].messages.find((message) => message.role === 'assistant')?.reasoning_content,
+  ).toContain('先核对当前阅读范围')
+  await expect(page.locator('.reasoning-block summary')).toContainText('思考过程')
+  await page.locator('.reasoning-block summary').click()
+  await expect(page.locator('.reasoning-content')).toContainText('先核对当前阅读范围')
+  await expect(
+    page.getByRole('complementary', { name: '阅读伙伴' }).getByLabel('工具调用记录'),
+  ).toContainText('搜索书内原文')
+  await page.locator('.tool-execution summary').click()
+  await expect(page.locator('.tool-detail')).toContainText('book_search')
+  await expect(page.locator('.tool-detail')).toContainText('"query": "理解"')
+  await expect(page.locator('.tool-detail')).toContainText('返回结果')
+  await page.locator('.tool-execution summary').click()
+  await page.screenshot({ path: '.local/screenshots/model-activity.png', fullPage: true })
   expect(remoteRequests).toEqual([])
   expect(await page.evaluate(() => '__aiExecuted' in window)).toBe(false)
   await page.getByRole('button', { name: '原文', exact: true }).click()
@@ -149,6 +183,12 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
     JSON.parse(requests[2].messages[1].content!.split('\n').slice(1).join('\n')).snapshotId,
   ).toBe(context.snapshotId)
   expect(requests[2].messages.filter((message) => message.role === 'user')).toHaveLength(3)
+  expect(requests[2].messages.filter((message) => message.role === 'assistant')).toHaveLength(2)
+  expect(
+    requests[2].messages
+      .filter((message) => message.role === 'assistant')
+      .every((message) => message.reasoning_content?.includes('先核对当前阅读范围')),
+  ).toBe(true)
   await page.getByRole('button', { name: '开始新话题' }).click()
   await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('取消测试')
   await page.getByRole('button', { name: '发送问题' }).click()
@@ -159,6 +199,26 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
   await page.getByRole('button', { name: '阅读笔记', exact: true }).click()
   await page.getByRole('button', { name: /阅读问答/ }).click()
   await expect(page.locator('.conversation-card')).toHaveCount(2)
+  await page.locator('.conversation-card').filter({ hasText: '为什么这句话值得停下来理解' }).click()
+  await expect(page.getByRole('dialog').getByLabel('工具调用记录')).toContainText('搜索书内原文')
+  await expect(page.getByRole('dialog').locator('.reasoning-block')).toHaveCount(2)
+  await page.getByRole('button', { name: '关闭对话框' }).click()
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await page.getByRole('button', { name: '数据与备份', exact: true }).click()
+  const backupDownload = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出 JSON 备份', exact: true }).click()
+  const backup = parseBackup(readFileSync((await (await backupDownload).path())!, 'utf8'))
+  expect(
+    backup.conversations
+      .flatMap((item) => item.messages)
+      .some((message) => message.protocol?.some((turn) => turn.role === 'tool')),
+  ).toBe(true)
+  expect(
+    backup.conversations
+      .flatMap((item) => item.messages)
+      .some((message) => message.reasoning?.includes('先核对当前阅读范围')),
+  ).toBe(true)
+  expect(JSON.stringify(backup)).not.toContain('ephemeral-test-secret')
   expect(await settingsStorage(page)).not.toContain('ephemeral-test-secret')
   await page.reload()
   await page.getByRole('button', { name: '打开设置' }).click()

@@ -50,8 +50,14 @@ export class SseDecoder {
     }
     if (event.error) throw new Error('模型服务返回错误，请检查配置或额度。')
     const choice = event.choices?.[0]
-    if (choice?.finish_reason) this.terminal = true
     if (choice?.delta) this.onDelta(choice.delta)
+    if (choice?.finish_reason) {
+      this.terminal = true
+      if (choice.finish_reason === 'length')
+        throw new Error('已达到输出预算，内容可能不完整。请提高输出预算或降低思考强度后重试。')
+      if (!['stop', 'tool_calls'].includes(choice.finish_reason))
+        throw new Error('模型服务中止了此次生成，内容可能不完整。')
+    }
   }
   finish() {
     if (this.buffer.trim()) this.record(this.buffer)
@@ -63,6 +69,9 @@ export const compatibleProvider: ProviderAdapter = {
   id: 'chat-completions-compatible',
   async complete(body, config: ModelSettings & { apiKey: string }, signal, onDelta) {
     const endpoint = completionEndpoint(config.endpoint)
+    const serialized = JSON.stringify(body)
+    if (new TextEncoder().encode(serialized).length > 512 * 1024)
+      throw new Error('会话上下文已达到大小上限，请开始新话题后再提问。')
     const parser = new SseDecoder(onDelta)
     const decoder = new TextDecoder()
     if (signal.aborted) throw new DOMException('已取消', 'AbortError')
@@ -108,7 +117,7 @@ export const compatibleProvider: ProviderAdapter = {
       }
       return
     }
-    const timeout = AbortSignal.timeout(120_000)
+    const timeout = AbortSignal.timeout(600_000)
     const response = await fetch(endpoint, {
       method: 'POST',
       redirect: 'error',
@@ -116,7 +125,7 @@ export const compatibleProvider: ProviderAdapter = {
         'Content-Type': 'application/json',
         ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
       },
-      body: JSON.stringify(body),
+      body: serialized,
       signal: AbortSignal.any([signal, timeout]),
     })
     if (!response.ok)
@@ -129,7 +138,7 @@ export const compatibleProvider: ProviderAdapter = {
         const { value, done } = await reader.read()
         if (done) break
         size += value.length
-        if (size > 4 * 1024 * 1024) throw new Error('模型回答超过大小上限。')
+        if (size > 16 * 1024 * 1024) throw new Error('模型回答超过大小上限。')
         parser.push(decoder.decode(value, { stream: true }))
       }
       parser.push(decoder.decode())

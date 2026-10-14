@@ -224,7 +224,7 @@ async fn completion_stream(
     let task = async {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(600))
             .build()
             .map_err(|_| "NETWORK_UNAVAILABLE")?;
         let mut builder = client
@@ -243,7 +243,7 @@ async fn completion_stream(
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|_| "NETWORK_STREAM_FAILED")?;
             size += chunk.len();
-            if size > 4 * 1024 * 1024 {
+            if size > 16 * 1024 * 1024 {
                 return Err("RESPONSE_TOO_LARGE".into());
             }
             channel

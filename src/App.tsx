@@ -12,6 +12,8 @@ import {
   LibraryBig,
   List,
   LockKeyhole,
+  Maximize,
+  Minimize,
   NotebookPen,
   Puzzle,
   Search,
@@ -28,7 +30,11 @@ import { ActionPacks } from './components/ActionPacks'
 import { Notebook } from './components/Notebook'
 import { AssistantPanel } from './components/AssistantPanel'
 import { Answer } from './components/Answer'
+import { ModelActivity } from './components/ModelActivity'
 import { Reader } from './reader/Reader'
+import { BookNotes, PassageNotes } from './components/BookNotes'
+import { isSamePassage, overlapsPassage } from './core/annotations'
+import { requestReaderFullscreen } from './reader/fullscreen'
 import { openEpub, type LoadedBook } from './reader/epub'
 import type { ReaderAdapter } from './reader/interfaces'
 import { storage, download } from './core/storage'
@@ -102,12 +108,20 @@ export default function App() {
   const [selection, setSelection] = useState<ReadingPoint | null>(null)
   const [showAssistant, setShowAssistant] = useState(true)
   const [showToc, setShowToc] = useState(false)
+  const [showBookNotes, setShowBookNotes] = useState(false)
+  const [annotationPoint, setAnnotationPoint] = useState<ReadingPoint | null>(null)
+  const [immersive, setImmersive] = useState(false)
+  const [controlsVisible, setControlsVisible] = useState(true)
   const [showAppearance, setShowAppearance] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const [panelHeight, setPanelHeight] = useState(55)
   const [toast, setToast] = useState('')
-  const [noteDraft, setNoteDraft] = useState<{ point: ReadingPoint; text: string } | null>(null)
+  const [noteDraft, setNoteDraft] = useState<{
+    point: ReadingPoint
+    text: string
+    annotationId?: string
+  } | null>(null)
   const [packPreview, setPackPreview] = useState<ActionPack | null>(null)
   const [packToDelete, setPackToDelete] = useState<InstalledPack | null>(null)
   const [restorePreview, setRestorePreview] = useState<Backup | null>(null)
@@ -132,6 +146,10 @@ export default function App() {
   const packInput = useRef<HTMLInputElement>(null)
   const backupInput = useRef<HTMLInputElement>(null)
   const mounted = useRef(true)
+  const releaseFullscreen = useRef<(() => Promise<void>) | null>(null)
+  const immersiveRef = useRef(false)
+  const previousPanels = useRef({ toc: false, assistant: true })
+  const annotationWrites = useRef(new Set<string>())
 
   const notify = useCallback((error: unknown) => {
     setToast(error instanceof Error ? error.message : String(error))
@@ -228,7 +246,15 @@ export default function App() {
               ...current,
               messages: current.messages.map((message) =>
                 message.role === 'assistant' && !message.status
-                  ? { ...message, status: 'cancelled' }
+                  ? {
+                      ...message,
+                      status: 'cancelled',
+                      tools: message.tools?.map((tool) =>
+                        ['preparing', 'running'].includes(tool.status)
+                          ? { ...tool, status: 'cancelled', summary: '已停止' }
+                          : tool,
+                      ),
+                    }
                   : message,
               ),
             }
@@ -241,8 +267,74 @@ export default function App() {
     setDraft('')
     setPending(null)
   }
+  const exitImmersive = useCallback(() => {
+    immersiveRef.current = false
+    setImmersive(false)
+    setControlsVisible(true)
+    setShowToc(previousPanels.current.toc)
+    setShowAssistant(previousPanels.current.assistant)
+    const release = releaseFullscreen.current
+    releaseFullscreen.current = null
+    void release?.().catch(notify)
+  }, [notify])
+  const hideControls = () => {
+    setShowToc(false)
+    setShowAssistant(false)
+    setShowBookNotes(false)
+    setAnnotationPoint(null)
+    setControlsVisible(false)
+  }
+  const enterImmersive = async () => {
+    previousPanels.current = { toc: showToc, assistant: showAssistant }
+    immersiveRef.current = true
+    setImmersive(true)
+    reader.current?.clearSelection()
+    hideControls()
+    try {
+      const release = await requestReaderFullscreen()
+      if (immersiveRef.current) releaseFullscreen.current = release
+      else await release()
+    } catch {
+      notify('已进入沉浸阅读。系统全屏暂不可用，点击正文中间可唤醒控件。')
+    }
+  }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as Element | null
+      if (
+        document.querySelector('dialog[open]') ||
+        target?.closest('input, textarea, select, [contenteditable="true"]')
+      )
+        return
+      if (event.key === 'Escape' && immersiveRef.current) exitImmersive()
+      if (
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        reader.current &&
+        !reader.current.capture()?.isSelection
+      ) {
+        if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+          event.preventDefault()
+          void (
+            event.key === 'ArrowRight' ? reader.current.next() : reader.current.previous()
+          ).catch(notify)
+        }
+      }
+    }
+    const onFullscreen = () => {
+      if (!document.fullscreenElement && immersiveRef.current) exitImmersive()
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('fullscreenchange', onFullscreen)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('fullscreenchange', onFullscreen)
+    }
+  }, [exitImmersive, notify])
   const changeScreen = (next: Screen) => {
     if (screen === 'reader' && next !== 'reader') cancel()
+    if (immersiveRef.current && next !== 'reader') exitImmersive()
     setScreen(next)
     setSelection(null)
   }
@@ -276,7 +368,9 @@ export default function App() {
       setDraft('')
       setScreen('reader')
       setLoading('正在排版…')
-      setShowToc(false)
+      setShowToc(window.innerWidth >= 1200)
+      setShowBookNotes(false)
+      setAnnotationPoint(null)
       if (old) setTimeout(() => old.book.destroy(), 100)
     } catch (error) {
       setLoading('')
@@ -304,6 +398,7 @@ export default function App() {
     if (!loaded) return
     setPosition(locator)
     setChapter(label)
+    setAnnotationPoint(null)
     const record = { ...loaded.record, position: locator, lastOpenedAt: new Date().toISOString() }
     setBooks((current) => current.map((book) => (book.id === record.id ? record : book)))
     void storage.put('books', record.id, record).catch(notify)
@@ -319,23 +414,55 @@ export default function App() {
   const saveAnnotation = async (kind: Annotation['kind'], point?: ReadingPoint, note = '') => {
     const current = point ?? capture()
     if (!current || !loaded) return
-    const annotation: Annotation = {
-      id: uniqueId(),
-      bookId: loaded.record.id,
-      bookVersion: loaded.record.version,
-      kind,
-      text: current.text.slice(0, 6000),
-      note,
-      chapter:
-        loaded.paragraphs.find((p) => p.id === current.locator.paragraphId)?.chapter ?? chapter,
-      locator: current.locator,
-      createdAt: new Date().toISOString(),
+    const writeKey = `${kind}:${current.locator.cfi}`
+    if (annotationWrites.current.has(writeKey)) return
+    annotationWrites.current.add(writeKey)
+    try {
+      const existing = annotations.filter(
+        (item) =>
+          item.bookId === loaded.record.id &&
+          item.bookVersion === loaded.record.version &&
+          item.kind === kind &&
+          (kind === 'highlight' ? overlapsPassage(item, current) : isSamePassage(item, current)),
+      )
+      if ((kind === 'highlight' || kind === 'bookmark') && existing.length) {
+        for (const item of existing) await storage.remove('annotations', item.id)
+        const ids = new Set(existing.map((item) => item.id))
+        setAnnotations((all) => all.filter((item) => !ids.has(item.id)))
+        notify(kind === 'highlight' ? '已取消高亮。' : '已取消书签。')
+        return
+      }
+      const annotation: Annotation = {
+        id: uniqueId(),
+        bookId: loaded.record.id,
+        bookVersion: loaded.record.version,
+        kind,
+        text: current.text.slice(0, 6000),
+        note,
+        chapter:
+          loaded.paragraphs.find((p) => p.id === current.locator.paragraphId)?.chapter ?? chapter,
+        locator: current.locator,
+        createdAt: new Date().toISOString(),
+      }
+      await storage.put('annotations', annotation.id, annotation)
+      setAnnotations((current) => [...current, annotation])
+      notify(
+        kind === 'bookmark'
+          ? '书签已保存。'
+          : kind === 'highlight'
+            ? '高亮已保存。'
+            : '笔记已保存。',
+      )
+    } finally {
+      annotationWrites.current.delete(writeKey)
     }
-    await storage.put('annotations', annotation.id, annotation)
-    setAnnotations((current) => [...current, annotation])
-    notify(
-      kind === 'bookmark' ? '书签已保存。' : kind === 'highlight' ? '高亮已保存。' : '笔记已保存。',
-    )
+  }
+  const removeAnnotation = async (annotation: Annotation) => {
+    await storage.remove('annotations', annotation.id)
+    setAnnotations((all) => all.filter((item) => item.id !== annotation.id))
+  }
+  const editNote = (point: ReadingPoint, annotation?: Annotation) => {
+    setNoteDraft({ point, text: annotation?.note ?? '', annotationId: annotation?.id })
   }
   const saveAnswer = async (message: Message) => {
     if (!conversation || !loaded) return
@@ -408,6 +535,21 @@ export default function App() {
             return
           if (event.type === 'text')
             updateAnswer((message) => ({ ...message, content: message.content + event.delta }))
+          if (event.type === 'reasoning')
+            updateAnswer((message) => ({
+              ...message,
+              reasoning: (message.reasoning ?? '') + event.delta,
+            }))
+          if (event.type === 'tool')
+            updateAnswer((message) => ({
+              ...message,
+              tools: [
+                ...(message.tools ?? []).filter((tool) => tool.id !== event.tool.id),
+                event.tool,
+              ],
+            }))
+          if (event.type === 'protocol')
+            updateAnswer((message) => ({ ...message, protocol: event.messages }))
           if (event.type === 'status') setRunStatus(event.text)
           if (event.type === 'evidence') {
             current = { ...current, evidence: event.fragments }
@@ -420,6 +562,15 @@ export default function App() {
       updateAnswer((message) => ({
         ...message,
         status: controller.signal.aborted ? 'cancelled' : 'error',
+        tools: message.tools?.map((tool) =>
+          ['preparing', 'running'].includes(tool.status)
+            ? {
+                ...tool,
+                status: controller.signal.aborted ? 'cancelled' : 'error',
+                summary: controller.signal.aborted ? '已停止' : '此次调用未完成',
+              }
+            : tool,
+        ),
       }))
       if (!controller.signal.aborted)
         notify(
@@ -449,6 +600,7 @@ export default function App() {
     if (!question.trim() || running || !loaded) return
     setDraft(question)
     setShowAssistant(true)
+    setControlsVisible(true)
     if (!configured) {
       setShowSettings(true)
       return
@@ -580,6 +732,12 @@ export default function App() {
       pack.manifest.actions.map((action) => ({ ...action, id: `${pack.id}:${action.id}` })),
     )
   const reading = screen === 'reader' && loaded
+  const selectedHighlight =
+    selection &&
+    activeAnnotations.some((item) => item.kind === 'highlight' && overlapsPassage(item, selection))
+  const passageAnnotations = annotationPoint
+    ? activeAnnotations.filter((item) => isSamePassage(item, annotationPoint))
+    : []
   const bookSearchResults =
     loaded && searchTerm.trim()
       ? loaded.paragraphs
@@ -589,7 +747,7 @@ export default function App() {
 
   return (
     <div
-      className={`app ${reading ? 'in-reader' : ''}`}
+      className={`app ${reading ? 'in-reader' : ''} ${immersive ? 'immersive' : ''} ${immersive && controlsVisible ? 'controls-awake' : ''}`}
       style={{ '--panel-height': `${panelHeight}dvh` } as CSSProperties}
     >
       <input
@@ -759,120 +917,159 @@ export default function App() {
         </>
       ) : (
         <>
-          <header className="reader-header">
-            <div className="reader-header-left">
-              <button
-                className="icon-button"
-                onClick={() => changeScreen('library')}
-                aria-label="返回书架"
-              >
-                <ArrowLeft size={20} />
-              </button>
-              <Brand compact />
-              <span className="header-divider" />
-              <span className="reader-title">{loaded.record.title}</span>
-              <span className="reader-author">{loaded.record.author}</span>
-            </div>
-            <div className="reader-toolbar">
-              <button
-                className={`icon-button toc-toggle ${showToc ? 'active' : ''}`}
-                onClick={() => setShowToc(!showToc)}
-                aria-label="显示目录"
-              >
-                <List size={20} />
-              </button>
-              <button
-                className="icon-button"
-                onClick={() => setShowBookSearch(true)}
-                aria-label="搜索书内原文"
-              >
-                <Search size={19} />
-              </button>
-              <button
-                className="icon-button"
-                onClick={() => setShowAppearance(true)}
-                aria-label="阅读排版"
-              >
-                <Type size={20} />
-              </button>
-              <button
-                className="icon-button"
-                disabled={!readerReady}
-                onClick={() => {
-                  void saveAnnotation('bookmark').catch(notify)
-                }}
-                aria-label="添加书签"
-              >
-                <Bookmark size={19} />
-              </button>
-              <span className="header-divider" />
-              <button
-                aria-label="阅读伙伴"
-                className={`button companion-toggle ${showAssistant ? 'selected' : ''}`}
-                onClick={() => setShowAssistant(!showAssistant)}
-              >
-                <Sparkles size={17} />
-                <span>阅读伙伴</span>
-              </button>
-            </div>
-          </header>
+          {(!immersive || controlsVisible) && (
+            <header className="reader-header">
+              <div className="reader-header-left">
+                <button
+                  className="icon-button"
+                  onClick={() => changeScreen('library')}
+                  aria-label="返回书架"
+                >
+                  <ArrowLeft size={20} />
+                </button>
+                <Brand compact />
+                <span className="header-divider" />
+                <span className="reader-title">{loaded.record.title}</span>
+                <span className="reader-author">{loaded.record.author}</span>
+              </div>
+              <div className="reader-toolbar">
+                <button
+                  className={`icon-button toc-toggle ${showToc ? 'active' : ''}`}
+                  onClick={() => setShowToc(!showToc)}
+                  aria-label="显示目录"
+                  aria-expanded={showToc}
+                >
+                  <List size={20} />
+                </button>
+                <button
+                  className={`icon-button ${showBookNotes ? 'active' : ''}`}
+                  aria-label="本书标注"
+                  aria-expanded={showBookNotes}
+                  onClick={() => setShowBookNotes(!showBookNotes)}
+                >
+                  <NotebookPen size={19} />
+                </button>
+                <button
+                  className="icon-button"
+                  onClick={() => setShowBookSearch(true)}
+                  aria-label="搜索书内原文"
+                >
+                  <Search size={19} />
+                </button>
+                <button
+                  className="icon-button"
+                  onClick={() => setShowAppearance(true)}
+                  aria-label="阅读排版"
+                >
+                  <Type size={20} />
+                </button>
+                <button
+                  className="icon-button"
+                  disabled={!readerReady}
+                  onClick={() => {
+                    void saveAnnotation('bookmark').catch(notify)
+                  }}
+                  aria-label="添加书签"
+                >
+                  <Bookmark size={19} />
+                </button>
+                <span className="header-divider" />
+                <button
+                  className="icon-button"
+                  aria-label={immersive ? '退出全屏阅读' : '全屏阅读'}
+                  onClick={() => {
+                    if (immersive) exitImmersive()
+                    else void enterImmersive()
+                  }}
+                >
+                  {immersive ? <Minimize size={19} /> : <Maximize size={19} />}
+                </button>
+                {immersive && (
+                  <button className="text-button" onClick={hideControls}>
+                    继续沉浸
+                  </button>
+                )}
+                <button
+                  aria-label="阅读伙伴"
+                  className={`button companion-toggle ${showAssistant ? 'selected' : ''}`}
+                  onClick={() => setShowAssistant(!showAssistant)}
+                >
+                  <Sparkles size={17} />
+                  <span>阅读伙伴</span>
+                </button>
+              </div>
+            </header>
+          )}
           <div
             className={`reading-layout ${showAssistant ? 'with-assistant' : ''} ${showToc ? 'toc-open' : ''}`}
           >
-            <aside className="toc-panel" aria-label="书籍目录">
-              <div className="toc-heading">
-                <h2>目录</h2>
-                <span>{loaded.book.sections.length} 个章节</span>
-                <button
-                  className="icon-button"
-                  onClick={() => setShowToc(false)}
-                  aria-label="收起目录"
-                >
-                  <X size={17} />
-                </button>
-              </div>
-              <nav>
-                {(loaded.book.toc ?? []).map((item, i) => (
-                  <div key={`${item.href}-${i}`}>
-                    <button
-                      className={chapter === item.label ? 'active' : ''}
-                      onClick={() => {
-                        void reader.current?.goTo(item.href)
-                        setShowToc(false)
-                      }}
-                    >
-                      <span>{String(i + 1).padStart(2, '0')}</span>
-                      {item.label}
-                    </button>
-                    {item.subitems?.map((subitem) => (
+            {immersive && !controlsVisible && (
+              <button className="wake-reader" onClick={() => setControlsVisible(true)}>
+                显示阅读控件
+              </button>
+            )}
+            {showToc && (
+              <aside className="toc-panel" aria-label="书籍目录">
+                <div className="toc-heading">
+                  <h2>目录</h2>
+                  <span>{loaded.book.sections.length} 个章节</span>
+                  <button
+                    className="icon-button"
+                    onClick={() => setShowToc(false)}
+                    aria-label="收起目录"
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+                <nav>
+                  {(loaded.book.toc ?? []).map((item, i) => (
+                    <div key={`${item.href}-${i}`}>
                       <button
-                        className="toc-subitem"
-                        key={subitem.href}
+                        className={chapter === item.label ? 'active' : ''}
                         onClick={() => {
-                          void reader.current?.goTo(subitem.href)
+                          void reader.current?.goTo(item.href)
                           setShowToc(false)
                         }}
                       >
-                        {subitem.label}
+                        <span>{String(i + 1).padStart(2, '0')}</span>
+                        {item.label}
                       </button>
-                    ))}
+                      {item.subitems?.map((subitem) => (
+                        <button
+                          className="toc-subitem"
+                          key={subitem.href}
+                          onClick={() => {
+                            void reader.current?.goTo(subitem.href)
+                            setShowToc(false)
+                          }}
+                        >
+                          {subitem.label}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </nav>
+                <div className="toc-bottom">
+                  <BookOpen size={21} />
+                  <strong>慢慢读，读进去。</strong>
+                  <p>每一次停留，都有意义。</p>
+                  <div className="toc-progress">
+                    <span style={{ width: `${(position?.progress ?? 0) * 100}%` }} />
                   </div>
-                ))}
-              </nav>
-              <div className="toc-bottom">
-                <BookOpen size={21} />
-                <strong>慢慢读，读进去。</strong>
-                <p>每一次停留，都有意义。</p>
-                <div className="toc-progress">
-                  <span style={{ width: `${(position?.progress ?? 0) * 100}%` }} />
+                  <span>已读 {Math.round((position?.progress ?? 0) * 100)}%</span>
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setShowBookNotes(true)
+                      setShowToc(false)
+                    }}
+                  >
+                    <NotebookPen size={15} />
+                    本书已保存 {activeAnnotations.length} 条标注
+                  </button>
                 </div>
-                <span>已读 {Math.round((position?.progress ?? 0) * 100)}%</span>
-                <button className="text-button" onClick={() => changeScreen('notes')}>
-                  <NotebookPen size={15} />
-                  本书已保存 {activeAnnotations.length} 条标注
-                </button>
-              </div>
-            </aside>
+              </aside>
+            )}
             <main className="reading-main">
               <div className="reading-caption">
                 <span>{loaded.record.title}</span>
@@ -885,7 +1082,30 @@ export default function App() {
                   preferences={preferences}
                   annotations={activeAnnotations}
                   onPosition={onPosition}
-                  onSelection={setSelection}
+                  onSelection={(point) => {
+                    setSelection(point)
+                    if (point) setAnnotationPoint(null)
+                  }}
+                  onAnnotation={(point) => {
+                    setAnnotationPoint(point)
+                    setSelection(null)
+                  }}
+                  onTap={(area) => {
+                    if (area === 'previous') void reader.current?.previous()
+                    else if (area === 'next') void reader.current?.next()
+                    else if (annotationPoint) setAnnotationPoint(null)
+                    else if (immersive) {
+                      if (controlsVisible) hideControls()
+                      else setControlsVisible(true)
+                    }
+                  }}
+                  onEscape={() => {
+                    if (immersive) exitImmersive()
+                    else {
+                      setAnnotationPoint(null)
+                      reader.current?.clearSelection()
+                    }
+                  }}
                   onReady={() => {
                     setReaderReady(true)
                     setLoading('')
@@ -902,12 +1122,46 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {showBookNotes && (
+                <BookNotes
+                  annotations={activeAnnotations}
+                  onClose={() => setShowBookNotes(false)}
+                  onLocate={(annotation) => {
+                    void reader.current
+                      ?.navigate(annotation.locator)
+                      .then(() => {
+                        setShowBookNotes(false)
+                        setAnnotationPoint({
+                          locator: annotation.locator,
+                          text: annotation.text,
+                          isSelection: true,
+                        })
+                      })
+                      .catch(notify)
+                  }}
+                />
+              )}
+              {annotationPoint && (
+                <PassageNotes
+                  point={annotationPoint}
+                  annotations={passageAnnotations}
+                  onClose={() => setAnnotationPoint(null)}
+                  onHighlight={() => {
+                    void saveAnnotation('highlight', annotationPoint).catch(notify)
+                  }}
+                  onEdit={(annotation) => editNote(annotationPoint, annotation)}
+                  onRemove={(annotation) => {
+                    void removeAnnotation(annotation).catch(notify)
+                  }}
+                />
+              )}
               {selection && (
                 <div className="selection-toolbar">
                   <span>已选 {selection.text.length} 字</span>
                   <button
                     onClick={() => {
                       setShowAssistant(true)
+                      setControlsVisible(true)
                       setDraft('请解释这段内容。')
                     }}
                   >
@@ -920,39 +1174,53 @@ export default function App() {
                     }}
                   >
                     <Highlighter size={15} />
-                    高亮
+                    {selectedHighlight ? '取消高亮' : '高亮'}
                   </button>
-                  <button onClick={() => setNoteDraft({ point: selection, text: '' })}>
+                  <button
+                    onClick={() =>
+                      editNote(
+                        selection,
+                        activeAnnotations.find(
+                          (item) => item.kind === 'note' && isSamePassage(item, selection),
+                        ),
+                      )
+                    }
+                  >
                     <NotebookPen size={15} />
                     笔记
                   </button>
+                  <button aria-label="取消选文" onClick={() => reader.current?.clearSelection()}>
+                    <X size={15} />
+                  </button>
                 </div>
               )}
-              <footer className="reading-footer">
-                <button
-                  className="icon-button"
-                  onClick={() => {
-                    void reader.current?.previous()
-                  }}
-                  aria-label="上一页"
-                >
-                  <ChevronLeft size={20} />
-                </button>
-                <span>{chapter || '阅读中'}</span>
-                <button
-                  className="icon-button"
-                  onClick={() => {
-                    void reader.current?.next()
-                  }}
-                  aria-label="下一页"
-                >
-                  <ChevronRight size={20} />
-                </button>
-                <span className="reading-saved">
-                  <Check size={13} />
-                  {Math.round((position?.progress ?? 0) * 100)}%
-                </span>
-              </footer>
+              {(!immersive || controlsVisible) && (
+                <footer className="reading-footer">
+                  <button
+                    className="icon-button"
+                    onClick={() => {
+                      void reader.current?.previous()
+                    }}
+                    aria-label="上一页"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+                  <span>{chapter || '阅读中'}</span>
+                  <button
+                    className="icon-button"
+                    onClick={() => {
+                      void reader.current?.next()
+                    }}
+                    aria-label="下一页"
+                  >
+                    <ChevronRight size={20} />
+                  </button>
+                  <span className="reading-saved">
+                    <Check size={13} />
+                    {Math.round((position?.progress ?? 0) * 100)}%
+                  </span>
+                </footer>
+              )}
             </main>
             {showAssistant && (
               <AssistantPanel
@@ -1017,7 +1285,10 @@ export default function App() {
         </Modal>
       )}
       {noteDraft && (
-        <Modal title="记下此刻的思考" onClose={() => setNoteDraft(null)}>
+        <Modal
+          title={noteDraft.annotationId ? '修改这段原文的笔记' : '记下此刻的思考'}
+          onClose={() => setNoteDraft(null)}
+        >
           <blockquote className="note-context">{noteDraft.point.text.slice(0, 500)}</blockquote>
           <label className="field">
             我的笔记
@@ -1036,9 +1307,18 @@ export default function App() {
               className="button primary"
               disabled={!noteDraft.text.trim()}
               onClick={() => {
-                void saveAnnotation('note', noteDraft.point, noteDraft.text)
-                  .then(() => setNoteDraft(null))
-                  .catch(notify)
+                const existing = annotations.find((item) => item.id === noteDraft.annotationId)
+                const save = existing
+                  ? (async () => {
+                      const updated = { ...existing, note: noteDraft.text }
+                      await storage.put('annotations', updated.id, updated)
+                      setAnnotations((all) =>
+                        all.map((item) => (item.id === updated.id ? updated : item)),
+                      )
+                      notify('笔记已更新。')
+                    })()
+                  : saveAnnotation('note', noteDraft.point, noteDraft.text)
+                void save.then(() => setNoteDraft(null)).catch(notify)
               }}
             >
               保存笔记
@@ -1256,6 +1536,7 @@ export default function App() {
                       ? '（未完成）'
                       : ''}
                 </strong>
+                {message.role === 'assistant' && <ModelActivity message={message} />}
                 <Answer
                   text={message.content}
                   evidence={archiveConversation.evidence}
@@ -1307,7 +1588,7 @@ export default function App() {
           <Brand />
           <p>在原文旁理解，顺畅继续阅读。</p>
           <p className="muted">
-            v0.1.0-alpha.1 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
+            v0.1.0-alpha.2 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
             foliate-js。正式目标为 Windows 11 与 Android 平板。
           </p>
           <div className="inline-notice">

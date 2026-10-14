@@ -1,8 +1,18 @@
-import type { Fragment, ModelSettings, Message, Snapshot } from '../core/types'
+import type {
+  CompletionMessage,
+  Fragment,
+  ModelSettings,
+  Message,
+  Snapshot,
+  ToolExecution,
+} from '../core/types'
 import type { ReadingTools } from '../core/tools'
 
 export type RunEvent = { runId: string; eventId: string; sequence: number } & (
   | { type: 'text'; delta: string }
+  | { type: 'reasoning'; delta: string }
+  | { type: 'tool'; tool: ToolExecution }
+  | { type: 'protocol'; messages: CompletionMessage[] }
   | { type: 'status'; text: string }
   | { type: 'evidence'; fragments: Fragment[] }
   | { type: 'done' }
@@ -40,6 +50,7 @@ export interface ProviderAdapter {
 }
 export interface ProviderDelta {
   content?: string
+  reasoning_content?: string
   tool_calls?: {
     index: number
     id?: string

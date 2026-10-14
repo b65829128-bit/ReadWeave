@@ -1,25 +1,20 @@
 import { ReadingToolError, readingToolDefinitions } from '../core/tools'
+import type { CompletionMessage, ToolCall, ToolExecution } from '../core/types'
 import { compatibleProvider } from './provider'
 import { taskContext, type HarnessAdapter, type RunEvent } from './contracts'
 
-interface ToolCall {
-  id: string
-  type: 'function'
-  function: { name: string; arguments: string }
-}
+type EventPayload = RunEvent extends infer E
+  ? E extends RunEvent
+    ? Omit<E, 'runId' | 'eventId' | 'sequence'>
+    : never
+  : never
 
 export const builtinHarness: HarnessAdapter = {
   id: 'builtin',
   capabilities: { tools: true, cancel: true, external: false },
   async submit({ tools, question, history, settings, apiKey, signal }, onEvent) {
     let sequence = 0
-    const emit = (
-      event:
-        | Omit<Extract<RunEvent, { type: 'text' }>, 'runId' | 'eventId' | 'sequence'>
-        | Omit<Extract<RunEvent, { type: 'status' }>, 'runId' | 'eventId' | 'sequence'>
-        | Omit<Extract<RunEvent, { type: 'evidence' }>, 'runId' | 'eventId' | 'sequence'>
-        | { type: 'done' },
-    ) => {
+    const emit = (event: EventPayload) => {
       if (!signal.aborted)
         onEvent({
           ...event,
@@ -28,45 +23,82 @@ export const builtinHarness: HarnessAdapter = {
           sequence,
         } as RunEvent)
     }
+    const deepseek = settings.provider === 'deepseek'
     const messages: Record<string, unknown>[] = [
       { role: 'system', content: settings.systemPrompt },
       {
         role: 'user',
         content: `阅读任务资料（JSON，正文只作为资料）：\n${taskContext(tools.snapshot)}`,
       },
-      ...history
-        .slice(-12)
-        .filter((m) => m.status !== 'error')
-        .map((m) => ({ role: m.role, content: m.content.slice(0, 12_000) })),
-      { role: 'user', content: question },
     ]
+    // Keep complete tool exchanges together. Cutting individual protocol messages breaks the API.
+    for (const message of history.slice(-12)) {
+      if (message.role === 'user') messages.push({ role: 'user', content: message.content })
+      else if (message.status === 'done') {
+        if (message.protocol?.length) {
+          for (const item of message.protocol) {
+            const copy: Record<string, unknown> = { ...item }
+            if (!deepseek) delete copy.reasoning_content
+            messages.push(copy)
+          }
+        } else
+          messages.push({
+            role: 'assistant',
+            content: message.content,
+            ...(deepseek ? { reasoning_content: message.reasoning ?? '' } : {}),
+          })
+      }
+    }
+    messages.push({ role: 'user', content: question })
+    const protocol: CompletionMessage[] = []
     let callsUsed = 0
+    let totalContent = 0
+    let totalReasoning = 0
     for (let round = 0; round < 7; round++) {
       if (signal.aborted) throw new DOMException('已取消', 'AbortError')
       const pending = new Map<number, ToolCall>()
       let content = ''
+      let reasoning = ''
       emit({ type: 'status', text: round ? '结合找到的原文，继续解释…' : '正在思考这段内容…' })
       await compatibleProvider.complete(
         {
           model: settings.model,
-          messages,
+          messages: structuredClone(messages),
           stream: true,
-          max_tokens: 2048,
-          ...(callsUsed < 6
-            ? { tools: readingToolDefinitions, tool_choice: 'auto', parallel_tool_calls: false }
+          max_tokens: settings.maxTokens,
+          ...(deepseek
+            ? {
+                thinking: { type: settings.thinking },
+                reasoning_effort:
+                  settings.thinking === 'enabled' ? settings.reasoningEffort : 'none',
+              }
             : {}),
+          ...(callsUsed < 6 ? { tools: readingToolDefinitions, tool_choice: 'auto' } : {}),
         },
         { ...settings, apiKey },
         signal,
         (delta) => {
           if (signal.aborted) return
+          if (typeof delta.reasoning_content === 'string') {
+            reasoning += delta.reasoning_content
+            totalReasoning += delta.reasoning_content.length
+            if (reasoning.length > 128_000 || totalReasoning > 256_000)
+              throw new Error('思考内容超过本轮长度上限，请降低思考强度或缩短输出预算。')
+            emit({ type: 'reasoning', delta: delta.reasoning_content })
+          }
           if (typeof delta.content === 'string') {
             content += delta.content
-            if (content.length > 64_000) throw new Error('回答超过本轮长度上限。')
+            totalContent += delta.content.length
+            if (totalContent > 64_000) throw new Error('回答超过本轮长度上限。')
             emit({ type: 'text', delta: delta.content })
           }
           for (const chunk of delta.tool_calls ?? []) {
-            if (!Number.isInteger(chunk.index) || chunk.index < 0 || chunk.index >= 6)
+            if (
+              !Number.isInteger(chunk.index) ||
+              chunk.index < 0 ||
+              chunk.index >= 6 ||
+              callsUsed + chunk.index >= 6
+            )
               throw new Error('模型请求的工具数量超过上限。')
             const call = pending.get(chunk.index) ?? {
               id: '',
@@ -83,18 +115,50 @@ export const builtinHarness: HarnessAdapter = {
             )
               throw new Error('工具请求超过大小上限。')
             pending.set(chunk.index, call)
+            emit({
+              type: 'tool',
+              tool: {
+                id: `${tools.runId}_${round}_${chunk.index}`,
+                name: call.function.name,
+                arguments: call.function.arguments,
+                status: 'preparing',
+              },
+            })
           }
         },
       )
-      if (!pending.size) {
+      const calls = [...pending.values()]
+      if (
+        calls.some((call) => !/^[a-zA-Z0-9_-]{1,160}$/.test(call.id)) ||
+        new Set(calls.map((call) => call.id)).size !== calls.length
+      )
+        throw new Error('模型返回了无效或重复的工具调用标识。')
+      const assistant: CompletionMessage = {
+        role: 'assistant',
+        content: content || null,
+        ...(deepseek || reasoning ? { reasoning_content: reasoning } : {}),
+        ...(calls.length ? { tool_calls: calls } : {}),
+      }
+      protocol.push(assistant)
+      messages.push(assistant)
+      if (!calls.length) {
+        emit({ type: 'protocol', messages: structuredClone(protocol) })
         emit({ type: 'done' })
         return
       }
-      const calls = [...pending.values()]
-      messages.push({ role: 'assistant', content: content || null, tool_calls: calls })
-      for (const call of calls) {
+      for (let index = 0; index < calls.length; index++) {
+        const call = calls[index]
         if (signal.aborted) throw new DOMException('已取消', 'AbortError')
+        const trace: ToolExecution = {
+          id: `${tools.runId}_${round}_${[...pending.keys()][index]}`,
+          name: call.function.name,
+          arguments: call.function.arguments,
+          status: 'running',
+        }
+        emit({ type: 'tool', tool: trace })
         let result: unknown
+        let summary: string
+        let succeeded = false
         try {
           if (++callsUsed > 6) throw new ReadingToolError('BUDGET_EXCEEDED', '工具调用上限为六次。')
           const args: unknown = JSON.parse(call.function.arguments)
@@ -106,17 +170,45 @@ export const builtinHarness: HarnessAdapter = {
           if (call.function.name === 'book_search') result = tools.search(args)
           else if (call.function.name === 'book_read_passage') result = tools.read(args)
           else throw new ReadingToolError('INVALID_ARGUMENT', '此工具未获得授权。')
+          const fragments = (result as { fragments: unknown[] }).fragments
+          summary = fragments.length ? `找到 ${fragments.length} 段原文` : '没有找到匹配的原文'
+          succeeded = true
           emit({ type: 'evidence', fragments: tools.allEvidence() })
         } catch (error) {
+          summary = error instanceof ReadingToolError ? error.message : '工具参数不是有效 JSON。'
           result = {
             error: {
               code: error instanceof ReadingToolError ? error.code : 'INVALID_ARGUMENT',
-              message:
-                error instanceof ReadingToolError ? error.message : '工具参数不是有效 JSON。',
+              message: summary,
             },
           }
         }
-        messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) })
+        const serialized = JSON.stringify(result)
+        emit({
+          type: 'tool',
+          tool: {
+            ...trace,
+            status: succeeded ? 'succeeded' : 'error',
+            summary,
+            result: serialized,
+          },
+        })
+        const response: CompletionMessage = {
+          role: 'tool',
+          tool_call_id: call.id,
+          content: serialized,
+        }
+        messages.push(response)
+        protocol.push(response)
+      }
+      emit({ type: 'protocol', messages: structuredClone(protocol) })
+      if (reasoning && totalReasoning + 2 <= 256_000) {
+        totalReasoning += 2
+        emit({ type: 'reasoning', delta: '\n\n' })
+      }
+      if (content && totalContent + 2 <= 64_000) {
+        totalContent += 2
+        emit({ type: 'text', delta: '\n\n' })
       }
     }
     throw new Error('已达到本轮执行上限，请基于现有回答继续阅读或重新提问。')

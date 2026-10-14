@@ -39,6 +39,114 @@ async function selectFirstParagraph(frame: Frame) {
       element.ownerDocument.dispatchEvent(new Event('selectionchange'))
     })
 }
+async function annotationRecords(page: Page): Promise<{ kind: string; note: string }[]> {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const request = indexedDB.open('readweave', 1)
+      request.onsuccess = () => resolve(request.result)
+    })
+    return new Promise((resolve) => {
+      const request = db.transaction('annotations').objectStore('annotations').getAll()
+      request.onsuccess = () => {
+        resolve(request.result)
+        db.close()
+      }
+    })
+  })
+}
+
+test('highlights toggle, existing notes open in the book and can be edited or removed', async ({
+  page,
+}) => {
+  await boot(page)
+  const frame = await openSample(page)
+  const original = (await readBooks(page)).find((book) => book.position)!.position!.cfi
+  await frame
+    .locator('p')
+    .first()
+    .dblclick({ position: { x: 35, y: 18 } })
+  await expect(page.locator('.selection-toolbar')).toBeVisible()
+  expect((await readBooks(page)).find((book) => book.position)!.position!.cfi).toBe(original)
+  await page.getByRole('button', { name: '取消选文' }).click()
+  await selectFirstParagraph(frame)
+  await page.getByRole('button', { name: '高亮', exact: true }).click()
+  await expect(page.getByRole('button', { name: '取消高亮', exact: true })).toBeVisible()
+  await selectFirstParagraph(frame)
+  await page.getByRole('button', { name: '取消高亮', exact: true }).click()
+  await expect.poll(async () => (await annotationRecords(page)).length).toBe(0)
+  await page.getByRole('button', { name: '高亮', exact: true }).click()
+  await page.getByRole('button', { name: '笔记', exact: true }).click()
+  await page.getByLabel('我的笔记').fill('第一次的理解')
+  await page.getByRole('button', { name: '保存笔记', exact: true }).click()
+  await page.getByRole('button', { name: '取消选文' }).click()
+  await frame
+    .locator('p')
+    .first()
+    .click({ position: { x: 20, y: 10 } })
+  await expect(page.getByRole('complementary', { name: '原文标注' })).toContainText('第一次的理解')
+  await page.getByRole('button', { name: '编辑笔记', exact: true }).click()
+  await page.getByLabel('我的笔记').fill('修正后的理解😀')
+  await page.getByRole('button', { name: '保存笔记', exact: true }).click()
+  await expect(page.getByRole('complementary', { name: '原文标注' })).toContainText(
+    '修正后的理解😀',
+  )
+  await page.screenshot({ path: '.local/screenshots/book-notes.png', fullPage: true })
+  await page.getByRole('button', { name: '取消高亮', exact: true }).click()
+  await expect
+    .poll(async () => (await annotationRecords(page)).map((a) => a.kind))
+    .toEqual(['note'])
+  await page.getByRole('button', { name: '删除笔记', exact: true }).click()
+  await expect.poll(async () => (await annotationRecords(page)).length).toBe(0)
+  await page.getByRole('button', { name: '关闭原文标注' }).click()
+  await page.getByRole('button', { name: '本书标注', exact: true }).click()
+  await expect(page.getByRole('complementary', { name: '本书标注' })).toContainText(
+    '选中原文即可高亮或记笔记',
+  )
+  await page.getByRole('button', { name: '收起本书标注' }).click()
+  await expect(page.locator('.in-reader')).toBeVisible()
+})
+
+test('every reader panel closes, fullscreen wakes on a center tap and edges turn pages', async ({
+  page,
+}) => {
+  await boot(page)
+  await openSample(page)
+  await page.getByRole('button', { name: '收起目录' }).click()
+  await expect(page.getByRole('complementary', { name: '书籍目录' })).toHaveCount(0)
+  await page.getByRole('button', { name: '收起阅读伙伴' }).click()
+  await expect(page.getByRole('complementary', { name: '阅读伙伴' })).toHaveCount(0)
+  await page.getByRole('button', { name: '全屏阅读', exact: true }).click()
+  await expect(page.locator('.app.immersive')).toBeVisible()
+  await expect(page.locator('.reader-header')).toHaveCount(0)
+  await expect(page.locator('.reading-footer')).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(true)
+  await page.screenshot({ path: '.local/screenshots/immersive.png', fullPage: true })
+  await expect
+    .poll(() =>
+      page
+        .locator('.reader-host')
+        .evaluate((element) => Math.round(element.getBoundingClientRect().height)),
+    )
+    .toBe(await page.evaluate(() => innerHeight))
+  const frame = page.frames().find((item) => item.url().startsWith('blob:'))!
+  const host = await page.locator('.reader-host').boundingBox()
+  await page.mouse.click(host!.x + host!.width / 2, host!.y + host!.height / 2)
+  await expect(page.getByRole('button', { name: '退出全屏阅读' })).toBeVisible()
+  await page.getByRole('button', { name: '继续沉浸', exact: true }).click()
+  await selectFirstParagraph(frame)
+  await expect(page.getByRole('button', { name: '高亮', exact: true })).toBeVisible()
+  await expect(page.locator('.reader-header')).toHaveCount(0)
+  await page.getByRole('button', { name: '取消选文' }).click()
+  const before = (await readBooks(page)).find((book) => book.position)!.position!.cfi
+  await page.mouse.click(host!.x + host!.width * 0.9, host!.y + host!.height / 2)
+  await expect
+    .poll(async () => (await readBooks(page)).find((book) => book.position)!.position!.cfi)
+    .not.toBe(before)
+  await page.mouse.click(host!.x + host!.width / 2, host!.y + host!.height / 2)
+  await page.getByRole('button', { name: '退出全屏阅读' }).click()
+  await expect(page.locator('.app.immersive')).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(false)
+})
 async function readBooks(
   page: Page,
 ): Promise<{ id: string; position?: { cfi: string; paragraphId: string; endOffset: number } }[]> {

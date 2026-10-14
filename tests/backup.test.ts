@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { backupSchema, parseBackup, restoreBackup } from '../src/core/backup'
+import { backupSchema, modelSettingsSchema, parseBackup, restoreBackup } from '../src/core/backup'
 import { defaultModel, defaultPreferences } from '../src/core/types'
 import { defaultPack } from '../src/core/plugins'
 import { sha256, storage } from '../src/core/storage'
@@ -39,6 +39,26 @@ const valid = () => ({
 
 describe('versioned backups', () => {
   beforeEach(() => vi.clearAllMocks())
+  it('loads legacy connection settings with provider-specific defaults and preserves explicit choices', () => {
+    const legacy = {
+      endpoint: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      systemPrompt: '阅读伙伴',
+    }
+    expect(modelSettingsSchema.parse(legacy)).toMatchObject({
+      provider: 'deepseek',
+      thinking: 'enabled',
+      reasoningEffort: 'high',
+      maxTokens: 32768,
+      model: 'deepseek-chat',
+    })
+    expect(
+      modelSettingsSchema.parse({ ...legacy, endpoint: 'https://example.com/v1' }).provider,
+    ).toBe('compatible')
+    expect(modelSettingsSchema.parse({ ...legacy, provider: 'compatible' }).provider).toBe(
+      'compatible',
+    )
+  })
   it('rejects unknown credentials fields, unrecognized formats and inconsistent book hashes', () => {
     expect(parseBackup(JSON.stringify(valid())).books).toHaveLength(1)
     for (const backup of [

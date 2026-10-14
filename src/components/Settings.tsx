@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Check, Download, KeyRound, LockKeyhole, Moon, Sun, Upload } from 'lucide-react'
 import { Modal } from './Modal'
-import type { ModelSettings, Preferences, Theme } from '../core/types'
+import { defaultModel, type ModelSettings, type Preferences, type Theme } from '../core/types'
 import { completionEndpoint } from '../harness/provider'
 
 export function Appearance({
@@ -136,6 +136,27 @@ export function SettingsDialog({
             使用你自己的模型服务。只在你发送问题后，才会发送阅读资料。
           </p>
           <label className="field">
+            模型服务
+            <select
+              value={draft.provider}
+              onChange={(event) =>
+                setDraft(
+                  event.target.value === 'deepseek'
+                    ? {
+                        ...draft,
+                        provider: 'deepseek',
+                        endpoint: defaultModel.endpoint,
+                        model: defaultModel.model,
+                      }
+                    : { ...draft, provider: 'compatible' },
+                )
+              }
+            >
+              <option value="deepseek">DeepSeek</option>
+              <option value="compatible">其他兼容服务</option>
+            </select>
+          </label>
+          <label className="field">
             服务地址
             <input
               value={draft.endpoint}
@@ -151,11 +172,78 @@ export function SettingsDialog({
             模型名称
             <input
               value={draft.model}
+              aria-label="模型名称"
               required
               maxLength={160}
               onChange={(event) => setDraft({ ...draft, model: event.target.value })}
               placeholder="模型服务提供的名称"
+              list={draft.provider === 'deepseek' ? 'deepseek-models' : undefined}
             />
+            {draft.provider === 'deepseek' && (
+              <>
+                <datalist id="deepseek-models">
+                  <option value="deepseek-flash" />
+                  <option value="deepseek-v4-pro" />
+                </datalist>
+                <small>
+                  官方当前模型：deepseek-flash、deepseek-v4-pro。已有模型名称会保留，可自行切换。
+                </small>
+              </>
+            )}
+          </label>
+          {draft.provider === 'deepseek' && (
+            <div className="thinking-settings">
+              <label className="field">
+                思考模式
+                <select
+                  aria-label="思考模式"
+                  value={draft.thinking}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      thinking: event.target.value as ModelSettings['thinking'],
+                    })
+                  }
+                >
+                  <option value="enabled">开启 · 展示模型的思考过程</option>
+                  <option value="disabled">关闭 · 直接回答</option>
+                </select>
+              </label>
+              <label className="field">
+                思考强度
+                <select
+                  aria-label="思考强度"
+                  value={draft.reasoningEffort}
+                  disabled={draft.thinking === 'disabled'}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      reasoningEffort: event.target.value as ModelSettings['reasoningEffort'],
+                    })
+                  }
+                >
+                  <option value="low">低 · 更快</option>
+                  <option value="high">高 · 日常推理</option>
+                  <option value="max">最高 · 复杂推理</option>
+                </select>
+                <small>思考内容逐步显示在回答上方，可展开或收起；更高强度可能等待更久。</small>
+              </label>
+            </div>
+          )}
+          <label className="field">
+            单次输出预算
+            <select
+              aria-label="单次输出预算"
+              value={draft.maxTokens}
+              onChange={(event) => setDraft({ ...draft, maxTokens: Number(event.target.value) })}
+            >
+              {[8192, 16384, 32768, 65536].map((value) => (
+                <option key={value} value={value}>
+                  {value.toLocaleString()} tokens
+                </option>
+              ))}
+            </select>
+            <small>思考与回答共用此预算，实际用量由模型服务计费。</small>
           </label>
           <label className="field">
             <span>

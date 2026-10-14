@@ -5,6 +5,7 @@ import type { Annotation, Locator, Preferences, ReadingPoint } from '../core/typ
 import type { FoliateLocation, FoliateView, ReaderAdapter } from './interfaces'
 import type { LoadedBook } from './epub'
 import { normalizeText } from './sanitize'
+import { textRange } from './range'
 
 interface Props {
   loaded: LoadedBook
@@ -12,6 +13,9 @@ interface Props {
   annotations: Annotation[]
   onPosition: (locator: Locator, chapter: string) => void
   onSelection: (point: ReadingPoint | null) => void
+  onAnnotation: (point: ReadingPoint) => void
+  onTap: (area: 'previous' | 'next' | 'center') => void
+  onEscape: () => void
   onReady: () => void
   onError: (error: unknown) => void
 }
@@ -35,6 +39,7 @@ function pointFromRange(
   sectionIndex: number,
   isSelection: boolean,
 ): ReadingPoint | null {
+  range = textRange(range)
   const end =
     range.endContainer.nodeType === Node.ELEMENT_NODE
       ? (range.endContainer as Element)
@@ -132,6 +137,12 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
       getParagraphs() {
         return loaded.paragraphs
       },
+      clearSelection() {
+        selected.current = null
+        for (const { doc } of viewRef.current?.renderer?.getContents() ?? [])
+          doc.defaultView?.getSelection()?.removeAllRanges()
+        callbacks.current.onSelection(null)
+      },
     }),
     [loaded],
   )
@@ -143,6 +154,8 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
     view.setAttribute('role', 'document')
     host.current?.append(view)
     let disposed = false
+    let annotationClicked = false
+    let dragging = false
     const cleanupDocuments: (() => void)[] = []
     view.addEventListener('external-link', (event) => {
       event.preventDefault()
@@ -152,6 +165,18 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
     })
     view.addEventListener('load', (event) => {
       const { doc, index } = (event as CustomEvent<{ doc: Document; index: number }>).detail
+      let touchGesture = false
+      let down: { x: number; y: number; time: number; touch: boolean } | null = null
+      const pointerDown = (event: PointerEvent) => {
+        dragging = false
+        touchGesture = event.pointerType === 'touch'
+        down = {
+          x: event.clientX,
+          y: event.clientY,
+          time: Date.now(),
+          touch: event.pointerType === 'touch',
+        }
+      }
       const updateSelection = () => {
         const selection = doc.defaultView?.getSelection()
         if (!selection || selection.isCollapsed || !selection.rangeCount) return
@@ -161,14 +186,26 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
           callbacks.current.onSelection(point)
         }
       }
-      const pointerUp = () => {
+      const pointerUp = (event: PointerEvent) => {
         const selection = doc.defaultView?.getSelection()
+        if (down) {
+          const dx = event.clientX - down.x
+          const dy = event.clientY - down.y
+          dragging = Math.hypot(dx, dy) > 8 || Date.now() - down.time > 500
+          if (down.touch && Math.abs(dx) > 70 && Math.abs(dy) < 40 && selection?.isCollapsed)
+            callbacks.current.onTap(dx > 0 ? 'previous' : 'next')
+          down = null
+        }
         if (!selection || selection.isCollapsed) {
           selected.current = null
           callbacks.current.onSelection(null)
         } else updateSelection()
       }
       const keydown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          callbacks.current.onEscape()
+          return
+        }
         if (
           event.altKey ||
           event.ctrlKey ||
@@ -185,13 +222,41 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
           void view.prev()
         }
       }
+      const click = (event: MouseEvent) => {
+        // Foliate reports annotation hits in this same dispatch. Wait until all listeners finish.
+        queueMicrotask(() => {
+          const hit = annotationClicked
+          annotationClicked = false
+          if (hit || dragging || !doc.defaultView?.getSelection()?.isCollapsed) return
+          const target = event.target as Element | null
+          if (target?.closest('a, button, input, textarea, select, label')) return
+          const bounds = host.current?.getBoundingClientRect()
+          const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
+          if (!bounds || !frame) return
+          const fraction = (frame.left + event.clientX - bounds.left) / bounds.width
+          // Mouse clicks in text must remain available for word selection, including double click.
+          if (
+            !touchGesture &&
+            target?.closest('[data-rw-paragraph]') &&
+            (fraction < 0.25 || fraction > 0.75)
+          )
+            return
+          callbacks.current.onTap(
+            fraction < 0.25 ? 'previous' : fraction > 0.75 ? 'next' : 'center',
+          )
+        })
+      }
       doc.addEventListener('selectionchange', updateSelection)
+      doc.addEventListener('pointerdown', pointerDown)
       doc.addEventListener('pointerup', pointerUp)
       doc.addEventListener('keydown', keydown)
+      doc.addEventListener('click', click)
       cleanupDocuments.push(() => {
         doc.removeEventListener('selectionchange', updateSelection)
+        doc.removeEventListener('pointerdown', pointerDown)
         doc.removeEventListener('pointerup', pointerUp)
         doc.removeEventListener('keydown', keydown)
+        doc.removeEventListener('click', click)
       })
     })
     view.addEventListener('relocate', (event) => {
@@ -211,10 +276,27 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
       const { draw, annotation } = (
         event as CustomEvent<{
           draw: (draw: typeof Overlayer.highlight, options: { color: string }) => void
-          annotation: { color?: string }
+          annotation: { value: string; color?: string }
         }>
       ).detail
-      draw(Overlayer.highlight, { color: annotation.color ?? '#e0cc7b' })
+      const isNoteOnly = !annotationRef.current.some(
+        (item) => item.kind === 'highlight' && item.locator.cfi === annotation.value,
+      )
+      draw(isNoteOnly ? Overlayer.underline : Overlayer.highlight, {
+        color: isNoteOnly ? '#669c91' : '#dfc86e',
+      })
+    })
+    view.addEventListener('show-annotation', (event) => {
+      const { value, index, range } = (
+        event as CustomEvent<{ value: string; index: number; range: Range }>
+      ).detail
+      if (dragging || !range.startContainer.ownerDocument?.defaultView?.getSelection()?.isCollapsed)
+        return
+      const annotation = annotationRef.current.find((item) => item.locator.cfi === value)
+      if (!annotation) return
+      annotationClicked = true
+      const point = pointFromRange(view, loaded, range, index, true)
+      if (point) callbacks.current.onAnnotation(point)
     })
     view.addEventListener('create-overlay', () => {
       for (const annotation of annotationRef.current.filter(
@@ -268,5 +350,17 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
     for (const value of live) void view.addAnnotation({ value, color: '#dfc86e' })
     renderedAnnotations.current = props.annotations
   }, [props.annotations])
-  return <div className="reader-surface" ref={host} />
+  return (
+    <div
+      className="reader-surface"
+      ref={host}
+      onClick={(event) => {
+        // Iframe events are handled inside the publication; this covers the engine's outer margins.
+        if (selected.current) return
+        const bounds = event.currentTarget.getBoundingClientRect()
+        const fraction = (event.clientX - bounds.left) / bounds.width
+        callbacks.current.onTap(fraction < 0.25 ? 'previous' : fraction > 0.75 ? 'next' : 'center')
+      }}
+    />
+  )
 })

@@ -76,6 +76,34 @@ const annotation = z
     createdAt: z.string().datetime(),
   })
   .strict()
+const toolCall = z
+  .object({
+    id,
+    type: z.literal('function'),
+    function: z.object({ name: z.string().max(100), arguments: z.string().max(8192) }).strict(),
+  })
+  .strict()
+const protocolMessage = z.discriminatedUnion('role', [
+  z
+    .object({
+      role: z.literal('assistant'),
+      content: z.string().max(64_000).nullable(),
+      reasoning_content: z.string().max(128_000).optional(),
+      tool_calls: z.array(toolCall).max(6).optional(),
+    })
+    .strict(),
+  z.object({ role: z.literal('tool'), tool_call_id: id, content: z.string().max(64_000) }).strict(),
+])
+const toolExecution = z
+  .object({
+    id,
+    name: z.string().max(100),
+    arguments: z.string().max(8192),
+    status: z.enum(['preparing', 'running', 'succeeded', 'error', 'cancelled']),
+    summary: z.string().max(1000).optional(),
+    result: z.string().max(64_000).optional(),
+  })
+  .strict()
 const conversation = z
   .object({
     id,
@@ -89,6 +117,9 @@ const conversation = z
             role: z.enum(['user', 'assistant']),
             content: z.string().max(64_000),
             status: z.enum(['done', 'cancelled', 'error']).optional(),
+            reasoning: z.string().max(256_000).optional(),
+            tools: z.array(toolExecution).max(6).optional(),
+            protocol: z.array(protocolMessage).max(13).optional(),
           })
           .strict(),
       )
@@ -121,11 +152,23 @@ export const preferencesSchema = z
   .strict()
 export const modelSettingsSchema = z
   .object({
+    provider: z.enum(['deepseek', 'compatible']).optional(),
     endpoint: z.string().max(2048),
     model: z.string().min(1).max(160),
     systemPrompt: z.string().min(1).max(8000),
+    thinking: z.enum(['enabled', 'disabled']).default('enabled'),
+    reasoningEffort: z.enum(['low', 'high', 'max']).default('high'),
+    maxTokens: z.number().int().min(1024).max(65_536).default(32_768),
   })
   .strict()
+  .transform((settings) => ({
+    ...settings,
+    provider:
+      settings.provider ??
+      (/^https:\/\/api\.deepseek\.com(?:\/|$)/i.test(settings.endpoint)
+        ? ('deepseek' as const)
+        : ('compatible' as const)),
+  }))
 export const backupSchema = z
   .object({
     format: z.literal('readweave-backup'),

@@ -119,4 +119,15 @@ describe('model transport', () => {
     decoder.push('data: {"choices":[{"delta":{"content":"部分回答"}}]}\n\n')
     expect(() => decoder.finish()).toThrow(/中断/)
   })
+  it('streams reasoning separately and exposes provider length limits instead of marking success', () => {
+    const reasoning: string[] = []
+    const decoder = new SseDecoder((delta) => {
+      if (delta.reasoning_content) reasoning.push(delta.reasoning_content)
+    })
+    decoder.push('data: {"choices":[{"delta":{"reasoning_content":"先检查原文😀"}}]}\n\n')
+    expect(reasoning).toEqual(['先检查原文😀'])
+    expect(() =>
+      decoder.push('data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n'),
+    ).toThrow(/输出预算/)
+  })
 })
