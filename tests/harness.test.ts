@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { builtinHarness } from '../src/harness/builtin'
 import { compatibleProvider } from '../src/harness/provider'
 import { ReadingTools } from '../src/core/tools'
+import { PreviewReadingTask } from '../src/core/reading-service'
 import { defaultModel, type CompletionMessage, type Message } from '../src/core/types'
 import type { ProviderDelta, RunEvent } from '../src/harness/contracts'
 
@@ -25,20 +26,22 @@ function tools() {
     addedAt: '',
     coverTone: 0,
   }
-  return new ReadingTools(
-    book,
-    [
-      {
-        id: 'p_0_0',
-        sectionIndex: 0,
-        ordinal: 0,
-        text: '理解从一个问题开始。',
-        cfi: locator.cfi,
-        chapter: '第一章',
-      },
-    ],
-    { locator, text: '理解从一个问题开', isSelection: true },
-    'to-position',
+  return new PreviewReadingTask(
+    new ReadingTools(
+      book,
+      [
+        {
+          id: 'p_0_0',
+          sectionIndex: 0,
+          ordinal: 0,
+          text: '理解从一个问题开始。',
+          cfi: locator.cfi,
+          chapter: '第一章',
+        },
+      ],
+      { locator, text: '理解从一个问题开', isSelection: true },
+      'to-position',
+    ),
   )
 }
 const stream = (deltas: ProviderDelta[]) =>
@@ -129,6 +132,47 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
     )
     expect(complete.mock.calls[0][0]).not.toHaveProperty('thinking')
     expect(complete.mock.calls[0][0]).not.toHaveProperty('reasoning_effort')
+  })
+  it('stops the tool loop if cancellation happens while an asynchronous reading tool is pending', async () => {
+    const task = tools()
+    let finish!: (value: Awaited<ReturnType<typeof task.search>>) => void
+    const pending = new Promise<Awaited<ReturnType<typeof task.search>>>((resolve) => {
+      finish = resolve
+    })
+    const search = vi.spyOn(task, 'search').mockReturnValue(pending)
+    const controller = new AbortController()
+    stream([{ tool_calls: [tool] }])
+    const events: RunEvent[] = []
+    const run = builtinHarness.submit(
+      {
+        tools: task,
+        question: '问题',
+        history: [],
+        settings: defaultModel,
+        apiKey: '',
+        signal: controller.signal,
+      },
+      (event) => events.push(event),
+    )
+    const rejection = expect(run).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(search).toHaveBeenCalledOnce())
+    controller.abort()
+    await task.revoke()
+    finish({
+      schemaVersion: 1,
+      snapshotId: task.snapshot.id,
+      bookVersion: task.snapshot.bookVersion,
+      fragments: [],
+      truncated: false,
+      nextCursor: null,
+      indexStatus: 'scan',
+    })
+    await rejection
+    expect(complete).toHaveBeenCalledOnce()
+    expect(events.filter((event) => event.type === 'tool').at(-1)).toMatchObject({
+      tool: { status: 'running' },
+    })
+    expect(events.some((event) => event.type === 'done')).toBe(false)
   })
   it('reports invalid tool arguments visibly without granting access or losing reasoning', async () => {
     stream([

@@ -3,6 +3,7 @@ import * as CFI from '../vendor/foliate/epubcfi.js'
 import { EPUB_LIMITS, safeArchivePath } from './archive'
 import { cleanXmlDeclaration, normalizeText, sanitizeXhtml } from './sanitize'
 import { sha256 } from '../core/storage'
+import { textRange } from './range'
 import type { BookRecord, Paragraph } from '../core/types'
 
 export interface LoadedBook {
@@ -101,7 +102,8 @@ export async function openEpub(
       const section = book.sections[index]
       const doc = await section.createDocument()
       const chapter =
-        normalizeText(doc.querySelector('h1,h2,title')?.textContent ?? '') || `第 ${index + 1} 节`
+        normalizeText(doc.querySelector('h1,h2,title')?.textContent ?? '').slice(0, 500) ||
+        `第 ${index + 1} 节`
       for (const element of doc.querySelectorAll('[data-rw-paragraph]')) {
         const text = normalizeText(element.textContent ?? '')
         characters += text.length
@@ -115,7 +117,7 @@ export async function openEpub(
           ordinal: paragraphs.length,
           text,
           chapter,
-          cfi: CFI.joinIndir(section.cfi, CFI.fromRange(range)),
+          cfi: CFI.joinIndir(section.cfi, CFI.fromRange(textRange(range))),
         })
       }
     }

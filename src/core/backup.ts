@@ -39,6 +39,8 @@ const snapshot = z
     bookId: hash,
     bookVersion: version,
     bookTitle: z.string().max(300),
+    transformVersion: z.string().max(160).optional(),
+    contentHash: hash.optional(),
     chapter: z.string().max(500),
     createdAt: z.string().datetime(),
     scope,

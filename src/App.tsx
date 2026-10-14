@@ -58,7 +58,7 @@ import {
   type InstalledPack,
   type ReadingAction,
 } from './core/plugins'
-import { ReadingTools } from './core/tools'
+import { readingService, type ReadingTask } from './core/reading-service'
 import {
   createBackup,
   exportMarkdown,
@@ -134,13 +134,18 @@ export default function App() {
   const [draft, setDraft] = useState('')
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [running, setRunning] = useState(false)
+  const [preparing, setPreparing] = useState(false)
   const [runStatus, setRunStatus] = useState('')
-  const [pending, setPending] = useState<{ tools: ReadingTools; question: string } | null>(null)
+  const [pending, setPending] = useState<{ tools: ReadingTask; question: string } | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [showBookSearch, setShowBookSearch] = useState(false)
   const reader = useRef<ReaderAdapter>(null)
   const activeController = useRef<AbortController | null>(null)
-  const activeTools = useRef<ReadingTools | null>(null)
+  const activeTools = useRef<ReadingTask | null>(null)
+  const pendingTask = useRef<ReadingTask | null>(null)
+  const preparingController = useRef<AbortController | null>(null)
+  const bookOpenGeneration = useRef(0)
+  const openedBook = useRef<LoadedBook | null>(null)
   const grants = useRef(new Set<string>())
   const fileInput = useRef<HTMLInputElement>(null)
   const packInput = useRef<HTMLInputElement>(null)
@@ -154,6 +159,14 @@ export default function App() {
   const notify = useCallback((error: unknown) => {
     setToast(error instanceof Error ? error.message : String(error))
   }, [])
+  const releaseTask = useCallback(
+    (task: ReadingTask | null) => {
+      void task?.revoke().catch((error) => {
+        if (mounted.current) notify(error)
+      })
+    },
+    [notify],
+  )
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(''), 7000)
@@ -226,14 +239,24 @@ export default function App() {
       })
     return () => {
       mounted.current = false
-      activeTools.current?.revoke()
+      bookOpenGeneration.current += 1
+      preparingController.current?.abort()
       activeController.current?.abort()
+      releaseTask(activeTools.current)
+      releaseTask(pendingTask.current)
+      openedBook.current?.book.destroy()
     }
-  }, [notify])
+  }, [notify, releaseTask])
 
   const cancel = () => {
-    activeTools.current?.revoke()
+    preparingController.current?.abort()
+    preparingController.current = null
+    setPreparing(false)
+    releaseTask(activeTools.current)
+    releaseTask(pendingTask.current)
     activeTools.current = null
+    pendingTask.current = null
+    setPending(null)
     const controller = activeController.current
     activeController.current = null
     controller?.abort()
@@ -260,6 +283,12 @@ export default function App() {
             }
           : null,
       )
+  }
+  const dismissPreview = () => {
+    releaseTask(pendingTask.current)
+    if (pendingTask.current === activeTools.current) activeTools.current = null
+    pendingTask.current = null
+    setPending(null)
   }
   const newTopic = () => {
     cancel()
@@ -334,6 +363,10 @@ export default function App() {
   }, [exitImmersive, notify])
   const changeScreen = (next: Screen) => {
     if (screen === 'reader' && next !== 'reader') cancel()
+    if (next !== 'reader') {
+      bookOpenGeneration.current += 1
+      setLoading('')
+    }
     if (immersiveRef.current && next !== 'reader') exitImmersive()
     setScreen(next)
     setSelection(null)
@@ -350,7 +383,7 @@ export default function App() {
   }
   const openBook = async (record: BookRecord, locator?: Locator) => {
     cancel()
-    setPending(null)
+    const generation = ++bookOpenGeneration.current
     setLoading('正在打开书籍…')
     setReaderReady(false)
     try {
@@ -360,9 +393,20 @@ export default function App() {
         ...record,
         ...(locator ? { position: locator } : {}),
       })
-      const old = loaded
+      try {
+        await readingService.register(next.record, next.paragraphs)
+      } catch (error) {
+        next.book.destroy()
+        throw error
+      }
+      if (!mounted.current || bookOpenGeneration.current !== generation) {
+        next.book.destroy()
+        return
+      }
+      const old = openedBook.current
+      openedBook.current = next
       setLoaded(next)
-      setPosition(record.position ?? null)
+      setPosition(locator ?? record.position ?? null)
       setSelection(null)
       setConversation(null)
       setDraft('')
@@ -373,8 +417,10 @@ export default function App() {
       setAnnotationPoint(null)
       if (old) setTimeout(() => old.book.destroy(), 100)
     } catch (error) {
-      setLoading('')
-      notify(error)
+      if (mounted.current && bookOpenGeneration.current === generation) {
+        setLoading('')
+        notify(error)
+      }
     }
   }
   const importBook = async (file: File) => {
@@ -476,11 +522,11 @@ export default function App() {
       message.content,
     )
   }
-  const grantKey = (tools: ReadingTools) =>
+  const grantKey = (tools: ReadingTask) =>
     `${model.endpoint}|${model.model}|${tools.snapshot.bookVersion}|${tools.snapshot.scope}`
 
-  const startRun = async (tools: ReadingTools, question: string) => {
-    if (!loaded || activeController.current) return
+  const startRun = async (tools: ReadingTask, question: string) => {
+    if (!loaded || activeController.current || tools.snapshot.bookId !== loaded.record.id) return
     const controller = new AbortController()
     activeController.current = controller
     activeTools.current = tools
@@ -503,6 +549,7 @@ export default function App() {
     )
     setConversation(current)
     setDraft('')
+    pendingTask.current = null
     setPending(null)
     setRunning(true)
     setShowAssistant(true)
@@ -589,15 +636,22 @@ export default function App() {
         notify(error)
       }
       if (activeController.current === controller) {
+        publish()
         activeController.current = null
         setRunning(false)
-        publish()
         setRunStatus('')
       }
     }
   }
-  const ask = (question: string) => {
-    if (!question.trim() || running || !loaded) return
+  const ask = async (question: string) => {
+    if (
+      !question.trim() ||
+      activeController.current ||
+      preparingController.current ||
+      pendingTask.current ||
+      !loaded
+    )
+      return
     setDraft(question)
     setShowAssistant(true)
     setControlsVisible(true)
@@ -605,17 +659,37 @@ export default function App() {
       setShowSettings(true)
       return
     }
+    const controller = new AbortController()
+    preparingController.current = controller
+    setPreparing(true)
     try {
       let tools = activeTools.current
       if (!tools || !conversation || tools.snapshot.id !== conversation.snapshot.id) {
         const point = capture()
         if (!point) return
-        tools = new ReadingTools(loaded.record, loaded.paragraphs, point, preferences.scope)
+        tools = await readingService.create(
+          loaded.record,
+          loaded.paragraphs,
+          point,
+          preferences.scope,
+          controller.signal,
+        )
       }
-      if (!grants.current.has(grantKey(tools))) setPending({ tools, question })
-      else void startRun(tools, question)
+      if (controller.signal.aborted || preparingController.current !== controller) {
+        releaseTask(tools)
+        return
+      }
+      if (!grants.current.has(grantKey(tools))) {
+        pendingTask.current = tools
+        setPending({ tools, question })
+      } else void startRun(tools, question)
     } catch (error) {
-      notify(error)
+      if (!controller.signal.aborted) notify(error)
+    } finally {
+      if (preparingController.current === controller) {
+        preparingController.current = null
+        setPreparing(false)
+      }
     }
   }
   const askAction = (action: ReadingAction) =>
@@ -676,39 +750,44 @@ export default function App() {
   }
   const navigateCitation = async () => {
     if (!citation) return
+    let temporary: LoadedBook | null = null
     try {
       const record = books.find((book) => book.id === citation.bookId)
       if (!record || record.version !== citation.bookVersion)
         throw new Error('引用对应的书籍版本不可用。')
       let target = loaded
-      let temporary: LoadedBook | null = null
       if (!target || target.record.id !== record.id) {
         const blob = await storage.getBlob(record.id)
         if (!blob) throw new Error('请先重新导入此书的原始 EPUB。')
         temporary = await openEpub(blob, record.fileName, record)
         target = temporary
       }
-      const paragraph =
-        activeTools.current?.snapshot.bookId === record.id
-          ? activeTools.current.resolveAnchor(citation.fragment.anchorRef)
-          : undefined
-      const matches = paragraph
-        ? [paragraph]
-        : target.paragraphs.filter((p) => p.text.includes(citation.fragment.text))
-      if (matches.length !== 1) {
-        temporary?.book.destroy()
-        throw new Error('引用存在多个候选或已经失效。原文仍可在此查看，未自动跳转。')
-      }
-      const match = matches[0]
-      const locator: Locator = {
-        cfi: match.cfi,
-        sectionIndex: match.sectionIndex,
-        paragraphId: match.id,
-        endOffset: match.text.length,
-        progress: 0,
-        quote: { exact: citation.fragment.text.slice(0, 240), prefix: '', suffix: '' },
+      await readingService.register(target.record, target.paragraphs)
+      let locator =
+        activeTools.current?.snapshot.bookId === record.id &&
+        activeTools.current.snapshot.bookVersion === record.version
+          ? await activeTools.current.resolveAnchor(citation.fragment.anchorRef)
+          : await readingService.resolveAnchor(
+              record.id,
+              record.version,
+              citation.fragment.anchorRef,
+            )
+      if (!locator) {
+        const matches = target.paragraphs.filter((p) => p.text.includes(citation.fragment.text))
+        if (matches.length !== 1)
+          throw new Error('引用存在多个候选或已经失效。原文仍可在此查看，未自动跳转。')
+        const match = matches[0]
+        locator = {
+          cfi: match.cfi,
+          sectionIndex: match.sectionIndex,
+          paragraphId: match.id,
+          endOffset: match.text.indexOf(citation.fragment.text) + citation.fragment.text.length,
+          progress: 0,
+          quote: { exact: citation.fragment.text.slice(0, 240), prefix: '', suffix: '' },
+        }
       }
       temporary?.book.destroy()
+      temporary = null
       if (loaded?.record.id === record.id && screen === 'reader')
         await reader.current?.navigate(locator)
       else await openBook(record, locator)
@@ -716,6 +795,8 @@ export default function App() {
       setArchiveConversation(null)
     } catch (error) {
       notify(error)
+    } finally {
+      temporary?.book.destroy()
     }
   }
 
@@ -1228,8 +1309,8 @@ export default function App() {
                 conversation={conversation}
                 actions={actions}
                 draft={draft}
-                running={running}
-                status={runStatus}
+                running={running || preparing}
+                status={preparing ? '正在准备原文…' : runStatus}
                 configured={configured}
                 onDraft={setDraft}
                 onSubmit={ask}
@@ -1259,8 +1340,8 @@ export default function App() {
           preferences={preferences}
           onSave={async (settings, key) => {
             const checked = modelSettingsSchema.parse(settings)
-            await storage.put('settings', 'model', checked)
             cancel()
+            await storage.put('settings', 'model', checked)
             setModel(checked)
             setApiKey(key)
             setConfigured(true)
@@ -1327,7 +1408,7 @@ export default function App() {
         </Modal>
       )}
       {pending && (
-        <Modal title="发送前，看看会分享什么" onClose={() => setPending(null)} wide>
+        <Modal title="发送前，看看会分享什么" onClose={dismissPreview} wide>
           <p className="muted">问题和下列原文将发送给你配置的模型服务。服务可能保留收到的内容。</p>
           <dl className="send-details">
             <div>
@@ -1373,7 +1454,7 @@ export default function App() {
             后续可在以上范围内取证，每轮有读取上限。普通书内读取无需反复确认。范围或服务变化时会再次预览。
           </p>
           <div className="modal-footer">
-            <button className="button" onClick={() => setPending(null)}>
+            <button className="button" onClick={dismissPreview}>
               暂不发送
             </button>
             <button

@@ -167,14 +167,15 @@ export const builtinHarness: HarnessAdapter = {
             text:
               call.function.name === 'book_search' ? '正在书中寻找相关原文…' : '正在读取附近段落…',
           })
-          if (call.function.name === 'book_search') result = tools.search(args)
-          else if (call.function.name === 'book_read_passage') result = tools.read(args)
+          if (call.function.name === 'book_search') result = await tools.search(args)
+          else if (call.function.name === 'book_read_passage') result = await tools.read(args)
           else throw new ReadingToolError('INVALID_ARGUMENT', '此工具未获得授权。')
           const fragments = (result as { fragments: unknown[] }).fragments
           summary = fragments.length ? `找到 ${fragments.length} 段原文` : '没有找到匹配的原文'
           succeeded = true
           emit({ type: 'evidence', fragments: tools.allEvidence() })
         } catch (error) {
+          if (signal.aborted) throw new DOMException('已取消', 'AbortError')
           summary = error instanceof ReadingToolError ? error.message : '工具参数不是有效 JSON。'
           result = {
             error: {

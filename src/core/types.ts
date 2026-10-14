@@ -51,6 +51,8 @@ export interface Snapshot {
   id: string
   bookId: string
   bookVersion: string
+  transformVersion?: string
+  contentHash?: string
   bookTitle: string
   chapter: string
   createdAt: string

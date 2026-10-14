@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ReadingTools, permittedParagraphs, verifiedCitations } from '../src/core/tools'
 import type { BookRecord, Paragraph, ReadingPoint } from '../src/core/types'
+import { textSlice, textTail } from '../src/core/text'
 
 const book: BookRecord = {
   id: 'a'.repeat(64),
@@ -70,6 +71,44 @@ describe('frozen, scoped reading grants', () => {
     location.locator.paragraphId = 'p_1_0'
     expect(tools.search({ query: '丞相' }).fragments[0].text).toBe('丞相负责政务。')
     expect(tools.snapshot.locator.paragraphId).toBe('p_0_1')
+  })
+  it('rejects half-surrogate boundaries and returns whole Unicode code points within a budget', () => {
+    const invalid = structuredClone(point)
+    invalid.locator.endOffset = 3
+    expect(() => new ReadingTools(book, paragraphs, invalid, 'to-position')).toThrow(/边界/)
+    expect(textSlice('中😀é文', 2, 3)).toEqual({ text: '😀e', start: 1 })
+    expect(textTail('中😀', 1)).toEqual({ text: '', start: 3 })
+    const tools = new ReadingTools(book, paragraphs, point, 'book')
+    const result = tools.read({ ref: tools.snapshot.initial[0].ref, paragraphs: 1, maxChars: 3 })
+    expect(result.fragments[0].text).toBe('丞相负')
+    const emoji = new ReadingTools(
+      book,
+      [{ ...paragraphs[0], text: '😀😀' }],
+      { ...point, locator: { ...point.locator, paragraphId: 'p_0_0', endOffset: 4 } },
+      'book',
+    )
+    expect(
+      emoji.read({ ref: emoji.snapshot.initial[0].ref, paragraphs: 1, maxChars: 3 }).fragments[0]
+        .text,
+    ).toBe('😀')
+  })
+  it('maps a search excerpt and its anchor back to the source across expanding lowercase characters', () => {
+    const text = `İ${'中'.repeat(115)}😀 ABC${'文'.repeat(1500)}`
+    const source = [{ ...paragraphs[0], text }]
+    const tools = new ReadingTools(
+      book,
+      source,
+      { ...point, locator: { ...point.locator, paragraphId: 'p_0_0', endOffset: text.length } },
+      'book',
+    )
+    const fragment = tools.search({ query: 'abc' }).fragments[0]
+    expect(fragment.text).toBe(text.slice(0, 1000))
+    expect(fragment.text).toContain('ABC')
+    expect(tools.resolveAnchor(fragment.anchorRef)).toMatchObject({
+      paragraphId: 'p_0_0',
+      endOffset: 1000,
+      quote: { exact: fragment.text.slice(0, 240) },
+    })
   })
   it('rejects foreign refs, injected parameters, stale cursors, cancellation and expiration', () => {
     const first = new ReadingTools(book, paragraphs, point, 'book')
