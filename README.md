@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.4`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.5`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -44,10 +44,12 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.4_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.5_x64-setup.exe
 ```
 
 这是未签名的开发预览包。Windows 11 是产品目标，实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
+
+Windows 启动失败会显示“ReadWeave 启动诊断”，列出具体步骤和错误代码；安装目录可写时，还会在 EXE 旁留下 `ReadWeave-startup-error.log`。报告仅包含应用版本、固定步骤、错误代码和静态说明，不包含书籍、模型设置或密钥。界面缓存使用独立的 `webview-v1` 目录，书籍与记录继续使用原来的本地存储。
 
 首次升级旧数据库前会在数据库旁生成一致性 SQLite 备份，保留书籍、标注、问答与进度。迁移范围、回滚方式及来源校验边界见 [原生阅读核心](docs/native-reading-core.md)。
 
