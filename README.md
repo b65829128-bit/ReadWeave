@@ -51,6 +51,8 @@ src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.5_x64-setup.exe
 
 Windows 启动失败会显示“ReadWeave 启动诊断”，列出具体步骤和错误代码；安装目录可写时，还会在 EXE 旁留下 `ReadWeave-startup-error.log`。报告仅包含应用版本、固定步骤、错误代码和静态说明，不包含书籍、模型设置或密钥。界面缓存使用独立的 `webview-v1` 目录，书籍与记录继续使用原来的本地存储。
 
+本机 alpha.3 / alpha.4 / alpha.5 的秒退已定位为生成 EXE 继承构建目录的 Low 完整性标记，导致无法写入用户数据。当前本地交付文件已修正为正常用户的 Medium 标记，alpha.5 已实际恢复书架，旧记录完整保留。用户确认《资治通鉴》在 Windows 应用中导入成功，性能问题仍待排查；打包流程的自动检查尚待补齐，详情见验证记录。
+
 首次升级旧数据库前会在数据库旁生成一致性 SQLite 备份，保留书籍、标注、问答与进度。迁移范围、回滚方式及来源校验边界见 [原生阅读核心](docs/native-reading-core.md)。
 
 ## 配置阅读伙伴
