@@ -21571,8 +21571,8 @@ DEALINGS IN THE SOFTWARE.
 
 
 ==============================================================================
-Rust: hashlink 0.11.1
-https://crates.io/crates/hashlink/0.11.1
+Rust: hashlink 0.12.2
+https://crates.io/crates/hashlink/0.12.2
 
 LICENSE-APACHE
                               Apache License
@@ -26245,8 +26245,8 @@ DEALINGS IN THE SOFTWARE.
 
 
 ==============================================================================
-Rust: libsqlite3-sys 0.36.0
-https://crates.io/crates/libsqlite3-sys/0.36.0
+Rust: libsqlite3-sys 0.38.2
+https://crates.io/crates/libsqlite3-sys/0.38.2
 
 LICENSE
 Copyright (c) 2014 The rusqlite developers
@@ -35189,8 +35189,8 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 
 ==============================================================================
-Rust: rusqlite 0.38.0
-https://crates.io/crates/rusqlite/0.38.0
+Rust: rusqlite 0.40.2
+https://crates.io/crates/rusqlite/0.40.2
 
 LICENSE
 Copyright (c) 2014 The rusqlite developers

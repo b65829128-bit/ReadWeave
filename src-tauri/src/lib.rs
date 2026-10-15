@@ -1,11 +1,11 @@
 use futures_util::StreamExt;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
 use tauri::{ipc::Channel, Manager, State};
 use tokio::sync::watch;
 
+mod book_files;
 mod database;
 mod reading;
 mod reading_commands;
@@ -161,30 +161,36 @@ fn records_merge(entries: Vec<RecordEntry>, state: State<'_, AppState>) -> Resul
 }
 
 #[tauri::command]
-fn book_blob_put(key: String, bytes: Vec<u8>, state: State<'_, AppState>) -> Result<(), String> {
-    check_hash(&key)?;
-    if bytes.len() > 32 * 1024 * 1024 {
-        return Err("BOOK_TOO_LARGE".into());
-    }
-    if format!("{:x}", Sha256::digest(&bytes)) != key {
-        return Err("BOOK_VERSION_MISMATCH".into());
-    }
-    let path = state.books.join(format!("{key}.epub"));
-    let temporary = state.books.join(format!("{key}.tmp"));
-    std::fs::write(&temporary, bytes).map_err(|_| "BOOK_WRITE_FAILED")?;
-    // Content-addressed blobs are immutable; an existing matching hash is sufficient.
-    if path.exists() {
-        std::fs::remove_file(temporary).map_err(|_| "BOOK_WRITE_FAILED")?;
-    } else {
-        std::fs::rename(temporary, path).map_err(|_| "BOOK_WRITE_FAILED")?;
-    }
-    Ok(())
+async fn book_blob_put(
+    key: String,
+    bytes: Vec<u8>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    book_files::put(&state.books, &key, &bytes)
 }
 
 #[tauri::command]
-fn book_blob_get(key: String, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
-    check_hash(&key)?;
-    std::fs::read(state.books.join(format!("{key}.epub"))).map_err(|_| "BOOK_NOT_FOUND".into())
+async fn book_blob_put_binary(
+    request: tauri::ipc::Request<'_>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let key = request
+        .headers()
+        .get("x-readweave-book")
+        .and_then(|value| value.to_str().ok())
+        .ok_or("INVALID_BOOK_HASH")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("INVALID_BOOK_PAYLOAD".into());
+    };
+    book_files::put(&state.books, key, bytes)
+}
+
+#[tauri::command]
+async fn book_blob_get(
+    key: String,
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, String> {
+    book_files::get(&state.books, &key).map(tauri::ipc::Response::new)
 }
 
 #[derive(Deserialize)]
@@ -332,6 +338,7 @@ pub fn run() {
             record_delete,
             records_merge,
             book_blob_put,
+            book_blob_put_binary,
             book_blob_get,
             completion_stream,
             completion_cancel,

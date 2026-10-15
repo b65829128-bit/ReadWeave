@@ -147,9 +147,13 @@ test('every reader panel closes, fullscreen wakes on a center tap and edges turn
   await expect(page.locator('.app.immersive')).toHaveCount(0)
   await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(false)
 })
-async function readBooks(
-  page: Page,
-): Promise<{ id: string; position?: { cfi: string; paragraphId: string; endOffset: number } }[]> {
+async function readBooks(page: Page): Promise<
+  {
+    id: string
+    isSample?: boolean
+    position?: { cfi: string; paragraphId: string; endOffset: number }
+  }[]
+> {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('readweave', 1)
@@ -295,6 +299,8 @@ test('malicious EPUB cannot run scripts, set locators or make remote requests', 
 test('imports and reopens a book with more than fifty thousand paragraphs', async ({ page }) => {
   test.setTimeout(90_000)
   await boot(page)
+  const workers: string[] = []
+  page.on('worker', (worker) => workers.push(worker.url()))
   const sections = 102
   const files: Record<string, Uint8Array> = {
     mimetype: strToU8('application/epub+zip'),
@@ -320,6 +326,19 @@ test('imports and reopens a book with more than fifty thousand paragraphs', asyn
   await expect(page.locator('.reader-loading')).toHaveCount(0)
   const frame = page.frames().find((item) => item.url().startsWith('blob:'))!
   await expect(frame.locator('p').first()).toHaveText('这是第 1 段正文。')
+  expect(workers).toHaveLength(1)
+  const firstPosition = (await readBooks(page)).find((book) => !book.isSample)!.position!.cfi
+  await page.getByRole('button', { name: '下一页', exact: true }).click()
+  await expect
+    .poll(async () => (await readBooks(page)).find((book) => !book.isSample)?.position?.cfi)
+    .not.toBe(firstPosition)
+  const position = (await readBooks(page)).find((book) => !book.isSample)!.position!.cfi
+  await page.getByRole('button', { name: '返回书架', exact: true }).click()
+  await page.locator('.book-card').filter({ hasText: '多段落兼容回归' }).click()
+  await expect(page.locator('.reader-header')).toContainText('多段落兼容回归')
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  expect(workers).toHaveLength(1)
+  expect((await readBooks(page)).find((book) => !book.isSample)!.position!.cfi).toBe(position)
   await page.reload()
   await expect(page.locator('.book-card')).toHaveCount(3)
   await page.locator('.book-card').filter({ hasText: '多段落兼容回归' }).click()
@@ -327,6 +346,31 @@ test('imports and reopens a book with more than fifty thousand paragraphs', asyn
     timeout: 60_000,
   })
   await expect(page.locator('.reader-loading')).toHaveCount(0)
+  expect(workers).toHaveLength(2)
+})
+
+test('leaving the library during import stops its worker and does not open the book later', async ({
+  page,
+}) => {
+  await boot(page)
+  const pattern = '**/assets/epub-worker-*.js'
+  await page.route(pattern, (route) =>
+    route.fulfill({ contentType: 'text/javascript', body: 'self.onmessage = () => {}' }),
+  )
+  const started = page.waitForEvent('worker')
+  await page.locator('input[accept^=".epub"]').setInputFiles('public/samples/gradient.epub')
+  const worker = await started
+  const closed = worker.waitForEvent('close')
+  await expect(page.getByRole('status')).toContainText('正在校验和导入 EPUB')
+  await page.getByRole('button', { name: /^我的书架/ }).click()
+  await closed
+  await page.unroute(pattern)
+  await expect(page.getByRole('status')).toHaveCount(0)
+  await expect(page.locator('.book-card')).toHaveCount(2)
+  await expect(page.locator('.reader-header')).toHaveCount(0)
+  await page.locator('.book-card').filter({ hasText: '梯度下降的第一步' }).click()
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  await expect(page.locator('.reader-header')).toContainText('梯度下降的第一步')
 })
 
 test('portrait tablet keeps the reader usable with an adjustable bottom answer panel', async ({

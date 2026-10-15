@@ -6,6 +6,15 @@ pub const DATABASE_VERSION: u32 = 2;
 
 pub fn open_database(path: &Path) -> CoreResult<Connection> {
     let existing = path.exists();
+    // Windows can redirect an existing AppData file without redirecting its
+    // sibling WAL/SHM files. Resolve the file first so SQLite keeps one physical
+    // database and its sidecars together, including during migration/backup.
+    let resolved = if existing {
+        Some(path.canonicalize().map_err(|_| error("STORAGE_FAILED"))?)
+    } else {
+        None
+    };
+    let path = resolved.as_deref().unwrap_or(path);
     let mut db = Connection::open(path).map_err(|_| error("STORAGE_FAILED"))?;
     db.busy_timeout(Duration::from_secs(5))
         .map_err(|_| error("STORAGE_FAILED"))?;
@@ -83,6 +92,50 @@ mod tests {
     use super::*;
     use crate::test_support::TestDirectory;
     use rusqlite::params;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn existing_database_uses_its_physical_location_through_a_directory_alias() {
+        let directory = TestDirectory::new();
+        let physical = directory.path().join("physical");
+        let alias = directory.path().join("alias");
+        std::fs::create_dir(&physical).unwrap();
+        let original = physical.join("readweave.sqlite3");
+        let db = open_database(&original).unwrap();
+        db.execute(
+            "INSERT INTO records(collection,id,value) VALUES('settings','keep','true')",
+            [],
+        )
+        .unwrap();
+        drop(db);
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path $env:READWEAVE_TEST_ALIAS -Target $env:READWEAVE_TEST_TARGET | Out-Null"])
+            .env("READWEAVE_TEST_ALIAS", alias.to_string_lossy().trim_start_matches(r"\\?\"))
+            .env("READWEAVE_TEST_TARGET", physical.to_string_lossy().trim_start_matches(r"\\?\"))
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "Cannot create the local test junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let db = open_database(&alias.join("readweave.sqlite3")).unwrap();
+        assert_eq!(
+            Path::new(db.path().unwrap()),
+            original.canonicalize().unwrap()
+        );
+        assert_eq!(
+            db.query_row::<String, _, _>("SELECT value FROM records WHERE id='keep'", [], |row| {
+                row.get(0)
+            })
+            .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            db.query_row::<String, _, _>("PRAGMA quick_check", [], |row| row.get(0))
+                .unwrap(),
+            "ok"
+        );
+    }
 
     fn records(db: &Connection) -> Vec<(String, String, String)> {
         db.prepare("SELECT collection,id,value FROM records ORDER BY collection,id")

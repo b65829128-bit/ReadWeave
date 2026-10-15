@@ -3,6 +3,7 @@ import * as CFI from '../vendor/foliate/epubcfi.js'
 import { EPUB_LIMITS, safeArchivePath } from './archive'
 import { cleanXmlDeclaration, normalizeText, sanitizeXhtml } from './sanitize'
 import { sha256 } from '../core/storage'
+import { yieldToMain } from '../core/scheduling'
 import readingLimits from '../core/reading-contract.json'
 import { textRange } from './range'
 import type { BookRecord, Paragraph } from '../core/types'
@@ -13,17 +14,26 @@ export interface LoadedBook {
   paragraphs: Paragraph[]
 }
 
-function unpack(blob: Blob): Promise<Record<string, Uint8Array>> {
+function unpack(blob: Blob, signal?: AbortSignal): Promise<Record<string, Uint8Array>> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted()
     const worker = new Worker(new URL('./epub-worker.ts', import.meta.url), { type: 'module' })
+    let settled = false
     const timeout = setTimeout(() => {
-      worker.terminate()
+      finish()
       reject(new Error('EPUB 解析超时，已停止导入。'))
     }, EPUB_LIMITS.timeout)
     const finish = () => {
+      settled = true
       clearTimeout(timeout)
+      signal?.removeEventListener('abort', abort)
       worker.terminate()
     }
+    const abort = () => {
+      finish()
+      reject(new DOMException('书籍打开已取消。', 'AbortError'))
+    }
+    signal?.addEventListener('abort', abort, { once: true })
     worker.onmessage = (event) => {
       finish()
       if (event.data.error) reject(new Error(event.data.error))
@@ -34,7 +44,9 @@ function unpack(blob: Blob): Promise<Record<string, Uint8Array>> {
       reject(new Error('EPUB 解析失败。'))
     }
     blob.arrayBuffer().then(
-      (buffer) => worker.postMessage(buffer, [buffer]),
+      (buffer) => {
+        if (!settled) worker.postMessage(buffer, [buffer])
+      },
       (error) => {
         finish()
         reject(error)
@@ -57,11 +69,14 @@ export async function openEpub(
   blob: Blob,
   fileName = 'book.epub',
   existing?: BookRecord,
+  signal?: AbortSignal,
 ): Promise<LoadedBook> {
+  signal?.throwIfAborted()
   if (!fileName.toLowerCase().endsWith('.epub'))
     throw new Error('首版仅支持无 DRM、可重排的 EPUB。')
   if (blob.size > EPUB_LIMITS.file) throw new Error('EPUB 文件超过 32 MB 上限。')
-  const [hash, files] = await Promise.all([sha256(blob), unpack(blob)])
+  const [hash, files] = await Promise.all([sha256(blob), unpack(blob, signal)])
+  signal?.throwIfAborted()
   if (existing && existing.id !== hash) throw new Error('书籍版本不一致，请重新导入原书。')
   const cache = new Map<string, string>()
   const loadText = async (path: string): Promise<string | null> => {
@@ -100,9 +115,16 @@ export async function openEpub(
     })
     const paragraphs: Paragraph[] = []
     let characters = 0
+    let yieldedAt = performance.now()
     for (let index = 0; index < book.sections.length; index++) {
+      signal?.throwIfAborted()
+      if (performance.now() - yieldedAt >= 8) {
+        await yieldToMain(signal)
+        yieldedAt = performance.now()
+      }
       const section = book.sections[index]
       const doc = await section.createDocument()
+      const cfiCache = new WeakMap<Node, unknown[]>()
       const chapter =
         normalizeText(doc.querySelector('h1,h2,title')?.textContent ?? '').slice(0, 500) ||
         `第 ${index + 1} 节`
@@ -123,8 +145,12 @@ export async function openEpub(
           ordinal: paragraphs.length,
           text,
           chapter,
-          cfi: CFI.joinIndir(section.cfi, CFI.fromRange(textRange(range))),
+          cfi: CFI.joinIndir(section.cfi, CFI.fromRange(textRange(range), undefined, cfiCache)),
         })
+        if (paragraphs.length % 128 === 0 && performance.now() - yieldedAt >= 8) {
+          await yieldToMain(signal)
+          yieldedAt = performance.now()
+        }
       }
     }
     if (!paragraphs.length) throw new Error('无法提取正文。扫描页、图片公式和 OCR 尚未支持。')

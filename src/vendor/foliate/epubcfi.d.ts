@@ -1,4 +1,8 @@
-export function fromRange(range: Range): string
+export function fromRange(
+  range: Range,
+  filter?: (node: Node) => number,
+  cache?: WeakMap<Node, unknown[]>,
+): string
 export function parse(cfi: string): unknown
 export function toRange(doc: Document, parts: unknown): Range
 export function collapse(cfi: string, toEnd?: boolean): string

@@ -257,13 +257,14 @@ const partsToNode = (node, parts, filter) => {
     }
 }
 
-const nodeToParts = (node, offset, filter) => {
+const nodeToParts = (node, offset, filter, cache) => {
     let { id, parentNode } = node
     while (filter && parentNode
         && parentNode !== node.ownerDocument.documentElement
         && filter(parentNode) === NodeFilter.FILTER_SKIP)
         parentNode = parentNode.parentNode
-    const indexed = indexChildNodes(parentNode, filter)
+    const indexed = cache?.get(parentNode) ?? indexChildNodes(parentNode, filter)
+    cache?.set(parentNode, indexed)
     const index = indexed.findIndex(x =>
         Array.isArray(x) ? x.some(x => x === node) : x === node)
     // adjust offset as if merging the text nodes in the chunk
@@ -280,16 +281,16 @@ const nodeToParts = (node, offset, filter) => {
     }
     const part = { id, index, offset }
     return (parentNode !== node.ownerDocument.documentElement
-        ? nodeToParts(parentNode, null, filter).concat(part) : [part])
+        ? nodeToParts(parentNode, null, filter, cache).concat(part) : [part])
         // remove ignored nodes
         .filter(x => x.index !== -1)
 }
 
-export const fromRange = (range, filter) => {
+export const fromRange = (range, filter, cache) => {
     const { startContainer, startOffset, endContainer, endOffset } = range
-    const start = nodeToParts(startContainer, startOffset, filter)
+    const start = nodeToParts(startContainer, startOffset, filter, cache)
     if (range.collapsed) return toString([start])
-    const end = nodeToParts(endContainer, endOffset, filter)
+    const end = nodeToParts(endContainer, endOffset, filter, cache)
     return buildRange([start], [end])
 }
 

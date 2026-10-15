@@ -145,6 +145,7 @@ export default function App() {
   const pendingTask = useRef<ReadingTask | null>(null)
   const preparingController = useRef<AbortController | null>(null)
   const bookOpenGeneration = useRef(0)
+  const bookOpenController = useRef<AbortController | null>(null)
   const openedBook = useRef<LoadedBook | null>(null)
   const grants = useRef(new Set<string>())
   const fileInput = useRef<HTMLInputElement>(null)
@@ -240,6 +241,7 @@ export default function App() {
     return () => {
       mounted.current = false
       bookOpenGeneration.current += 1
+      bookOpenController.current?.abort()
       preparingController.current?.abort()
       activeController.current?.abort()
       releaseTask(activeTools.current)
@@ -365,6 +367,8 @@ export default function App() {
     if (screen === 'reader' && next !== 'reader') cancel()
     if (next !== 'reader') {
       bookOpenGeneration.current += 1
+      bookOpenController.current?.abort()
+      bookOpenController.current = null
       setLoading('')
     }
     if (immersiveRef.current && next !== 'reader') exitImmersive()
@@ -381,28 +385,34 @@ export default function App() {
     setPreferences(parsed)
     void storage.put('settings', 'preferences', parsed).catch(notify)
   }
-  const openBook = async (record: BookRecord, locator?: Locator) => {
+  const openBook = async (record: BookRecord, locator?: Locator, prepared?: LoadedBook) => {
     cancel()
+    bookOpenController.current?.abort()
+    const controller = new AbortController()
+    bookOpenController.current = controller
     const generation = ++bookOpenGeneration.current
     setLoading('正在打开书籍…')
     setReaderReady(false)
+    let next: LoadedBook | null = null
     try {
-      const blob = await storage.getBlob(record.id)
-      if (!blob) throw new Error('原书尚未恢复。请重新导入相同版本的 EPUB，笔记和进度会自动关联。')
-      const next = await openEpub(blob, record.fileName, {
+      const nextRecord = {
         ...record,
         ...(locator ? { position: locator } : {}),
-      })
-      try {
-        await readingService.register(next.record, next.paragraphs)
-      } catch (error) {
-        next.book.destroy()
-        throw error
       }
-      if (!mounted.current || bookOpenGeneration.current !== generation) {
-        next.book.destroy()
-        return
+      // Keep only the current validated book. Returning from the library reuses
+      // its immutable content while taking progress and metadata from the record.
+      const cached = prepared ?? openedBook.current
+      if (cached?.record.id === record.id && cached.record.version === record.version) {
+        next = { ...cached, record: nextRecord }
+      } else {
+        const blob = await storage.getBlob(record.id)
+        controller.signal.throwIfAborted()
+        if (!blob)
+          throw new Error('原书尚未恢复。请重新导入相同版本的 EPUB，笔记和进度会自动关联。')
+        next = await openEpub(blob, record.fileName, nextRecord, controller.signal)
       }
+      await readingService.register(next.record, next.paragraphs)
+      if (!mounted.current || bookOpenGeneration.current !== generation) return false
       const old = openedBook.current
       openedBook.current = next
       setLoaded(next)
@@ -415,29 +425,47 @@ export default function App() {
       setShowToc(window.innerWidth >= 1200)
       setShowBookNotes(false)
       setAnnotationPoint(null)
-      if (old) setTimeout(() => old.book.destroy(), 100)
+      if (old && old.book !== next.book) setTimeout(() => old.book.destroy(), 100)
+      return true
     } catch (error) {
       if (mounted.current && bookOpenGeneration.current === generation) {
         setLoading('')
-        notify(error)
+        if (!controller.signal.aborted) notify(error)
       }
+      return false
+    } finally {
+      if (next && openedBook.current?.book !== next.book) next.book.destroy()
+      if (bookOpenController.current === controller) bookOpenController.current = null
     }
   }
   const importBook = async (file: File) => {
+    cancel()
+    bookOpenController.current?.abort()
+    const controller = new AbortController()
+    bookOpenController.current = controller
+    const generation = ++bookOpenGeneration.current
     setLoading('正在校验和导入 EPUB…')
+    let next: LoadedBook | null = null
     try {
-      const next = await openEpub(file, file.name)
+      next = await openEpub(file, file.name, undefined, controller.signal)
       const previous = await storage.get<BookRecord>('books', next.record.id)
+      controller.signal.throwIfAborted()
       const record = previous ?? next.record
       await storage.putBlob(record.id, file)
       await storage.put('books', record.id, record)
-      next.book.destroy()
+      if (!mounted.current || bookOpenGeneration.current !== generation) return
       await refreshData()
-      await openBook(record)
-      notify(previous ? '这本书已在书架中，已恢复上次的位置。' : '书籍已导入，开始阅读吧。')
+      if (bookOpenGeneration.current !== generation) return
+      if (await openBook(record, undefined, next))
+        notify(previous ? '这本书已在书架中，已恢复上次的位置。' : '书籍已导入，开始阅读吧。')
     } catch (error) {
-      setLoading('')
-      notify(error)
+      if (mounted.current && bookOpenGeneration.current === generation) {
+        setLoading('')
+        if (!controller.signal.aborted) notify(error)
+      }
+    } finally {
+      if (next && openedBook.current?.book !== next.book) next.book.destroy()
+      if (bookOpenController.current === controller) bookOpenController.current = null
     }
   }
   const onPosition = (locator: Locator, label: string) => {
@@ -782,11 +810,10 @@ export default function App() {
           quote: { exact: citation.fragment.text.slice(0, 240), prefix: '', suffix: '' },
         }
       }
-      temporary?.book.destroy()
-      temporary = null
       if (loaded?.record.id === record.id && screen === 'reader')
         await reader.current?.navigate(locator)
-      else await openBook(record, locator)
+      else await openBook(record, locator, temporary ?? undefined)
+      temporary = null
       setCitation(null)
       setArchiveConversation(null)
     } catch (error) {
@@ -1665,7 +1692,7 @@ export default function App() {
           <Brand />
           <p>在原文旁理解，顺畅继续阅读。</p>
           <p className="muted">
-            v0.1.0-alpha.5 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
+            v0.1.0-alpha.6 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
             foliate-js。正式目标为 Windows 11 与 Android 平板。
           </p>
           <div className="inline-notice">

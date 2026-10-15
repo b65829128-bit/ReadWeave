@@ -52,17 +52,20 @@ export const storage = {
     await transaction(collection, 'readwrite', (s) => s.delete(id))
   },
   async putBlob(key: string, blob: Blob): Promise<void> {
-    if (isTauri())
-      return invoke('book_blob_put', {
-        key,
-        bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
-      })
+    if (isTauri()) {
+      const bytes = await blob.arrayBuffer()
+      // Tauri 2's Android dispatcher does not accept raw request bodies.
+      if (/Android/i.test(navigator.userAgent))
+        return invoke('book_blob_put', { key, bytes: Array.from(new Uint8Array(bytes)) })
+      return invoke('book_blob_put_binary', bytes, { headers: { 'x-readweave-book': key } })
+    }
     await transaction('blobs', 'readwrite', (s) => s.put(blob, key))
   },
   async getBlob(key: string): Promise<Blob | undefined> {
     if (isTauri()) {
       try {
-        return new Blob([new Uint8Array(await invoke<number[]>('book_blob_get', { key }))], {
+        const bytes = await invoke<ArrayBuffer | number[]>('book_blob_get', { key })
+        return new Blob([Array.isArray(bytes) ? new Uint8Array(bytes) : bytes], {
           type: 'application/epub+zip',
         })
       } catch (error) {

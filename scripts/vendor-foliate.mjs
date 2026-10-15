@@ -73,4 +73,37 @@ for (const [before, after] of replacements) {
   paginator = paginator.replaceAll(before, after)
 }
 await writeFile(paginatorPath, paginator)
-console.log(`Vendored foliate-js ${commit} with three documented patch groups.`)
+const cfiPath = `${destination}/epubcfi.js`
+let cfi = (await readFile(cfiPath, 'utf8')).replaceAll('\r\n', '\n')
+const cfiReplacements = [
+  [
+    'const nodeToParts = (node, offset, filter) => {',
+    'const nodeToParts = (node, offset, filter, cache) => {',
+  ],
+  [
+    '    const indexed = indexChildNodes(parentNode, filter)',
+    '    const indexed = cache?.get(parentNode) ?? indexChildNodes(parentNode, filter)\n    cache?.set(parentNode, indexed)',
+  ],
+  [
+    'nodeToParts(parentNode, null, filter).concat(part)',
+    'nodeToParts(parentNode, null, filter, cache).concat(part)',
+  ],
+  [
+    'export const fromRange = (range, filter) => {',
+    'export const fromRange = (range, filter, cache) => {',
+  ],
+  [
+    'nodeToParts(startContainer, startOffset, filter)',
+    'nodeToParts(startContainer, startOffset, filter, cache)',
+  ],
+  [
+    'nodeToParts(endContainer, endOffset, filter)',
+    'nodeToParts(endContainer, endOffset, filter, cache)',
+  ],
+]
+for (const [before, after] of cfiReplacements) {
+  if (!cfi.includes(before)) throw new Error(`CFI cache patch no longer applies: ${before}`)
+  cfi = cfi.replace(before, after)
+}
+await writeFile(cfiPath, cfi)
+console.log(`Vendored foliate-js ${commit} with four documented patch groups.`)
