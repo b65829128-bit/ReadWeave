@@ -9,7 +9,7 @@ use std::{
 };
 
 fn storage<T>(value: rusqlite::Result<T>) -> CoreResult<T> {
-    value.map_err(|_| error("STORAGE_FAILED"))
+    value.map_err(database::storage_error)
 }
 fn json<T: serde::Serialize>(value: &T) -> CoreResult<String> {
     serde_json::to_string(value).map_err(|_| error("INVALID_ARGUMENT"))

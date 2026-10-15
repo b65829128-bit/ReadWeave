@@ -4,6 +4,31 @@ use std::{path::Path, time::Duration};
 
 pub const DATABASE_VERSION: u32 = 2;
 
+pub fn storage_error(failure: rusqlite::Error) -> crate::reading_models::CoreError {
+    use rusqlite::ErrorCode;
+    let code = match failure.sqlite_error_code() {
+        Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => "STORAGE_CORRUPTED",
+        Some(ErrorCode::DiskFull) => "STORAGE_FULL",
+        Some(ErrorCode::ReadOnly | ErrorCode::PermissionDenied) => "STORAGE_READ_ONLY",
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => "STORAGE_BUSY",
+        _ => "STORAGE_FAILED",
+    };
+    error(code)
+}
+
+fn check_integrity(db: &Connection) -> CoreResult<()> {
+    let mut statement = db.prepare("PRAGMA quick_check").map_err(storage_error)?;
+    let results = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(storage_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(storage_error)?;
+    if results != ["ok"] {
+        return Err(error("STORAGE_CORRUPTED"));
+    }
+    Ok(())
+}
+
 pub fn open_database(path: &Path) -> CoreResult<Connection> {
     let existing = path.exists();
     // Windows can redirect an existing AppData file without redirecting its
@@ -15,14 +40,19 @@ pub fn open_database(path: &Path) -> CoreResult<Connection> {
         None
     };
     let path = resolved.as_deref().unwrap_or(path);
-    let mut db = Connection::open(path).map_err(|_| error("STORAGE_FAILED"))?;
+    let mut db = Connection::open(path).map_err(storage_error)?;
     db.busy_timeout(Duration::from_secs(5))
-        .map_err(|_| error("STORAGE_FAILED"))?;
+        .map_err(storage_error)?;
     let version: u32 = db
         .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(|_| error("STORAGE_FAILED"))?;
+        .map_err(storage_error)?;
     if version > DATABASE_VERSION {
         return Err(error("SCHEMA_TOO_NEW"));
+    }
+    // Check before migrations, device registration or library writes. Do not
+    // silently rebuild a database whose user records may also be damaged.
+    if existing {
+        check_integrity(&db)?;
     }
     if existing && version < DATABASE_VERSION {
         let backup = path.with_file_name(format!(
@@ -46,17 +76,17 @@ pub fn open_database(path: &Path) -> CoreResult<Connection> {
     }
     migrate(&mut db)?;
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-        .map_err(|_| error("STORAGE_FAILED"))?;
+        .map_err(storage_error)?;
     Ok(db)
 }
 
 pub fn migrate(db: &mut Connection) -> CoreResult<()> {
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| error("STORAGE_FAILED"))?;
+        .map_err(storage_error)?;
     let version: u32 = tx
         .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(|_| error("STORAGE_FAILED"))?;
+        .map_err(storage_error)?;
     if version > DATABASE_VERSION {
         return Err(error("SCHEMA_TOO_NEW"));
     }
@@ -67,10 +97,10 @@ pub fn migrate(db: &mut Connection) -> CoreResult<()> {
         CREATE INDEX IF NOT EXISTS reading_blocks_order ON reading_blocks(book_id,ordinal);
         CREATE TABLE IF NOT EXISTS reading_snapshots (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, device_id TEXT NOT NULL, caller_id TEXT NOT NULL, book_id TEXT NOT NULL, book_version TEXT NOT NULL, transform_version TEXT NOT NULL, content_hash TEXT NOT NULL, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reading_evidence (anchor_ref TEXT PRIMARY KEY, citation_id TEXT NOT NULL UNIQUE, snapshot_id TEXT NOT NULL, device_id TEXT NOT NULL, caller_id TEXT NOT NULL, book_id TEXT NOT NULL, book_version TEXT NOT NULL, transform_version TEXT NOT NULL, content_hash TEXT NOT NULL, fragment TEXT NOT NULL, locator TEXT NOT NULL, FOREIGN KEY(snapshot_id) REFERENCES reading_snapshots(id));
-        ").map_err(|_| error("STORAGE_FAILED"))?;
+        ").map_err(storage_error)?;
     tx.pragma_update(None, "user_version", DATABASE_VERSION)
-        .map_err(|_| error("STORAGE_FAILED"))?;
-    tx.commit().map_err(|_| error("STORAGE_FAILED"))
+        .map_err(storage_error)?;
+    tx.commit().map_err(storage_error)
 }
 
 pub fn device_id(db: &Connection) -> CoreResult<String> {
@@ -78,13 +108,13 @@ pub fn device_id(db: &Connection) -> CoreResult<String> {
         "INSERT OR IGNORE INTO reading_meta(key,value) VALUES('device_id',?1)",
         [opaque("device")?],
     )
-    .map_err(|_| error("STORAGE_FAILED"))?;
+    .map_err(storage_error)?;
     db.query_row(
         "SELECT value FROM reading_meta WHERE key='device_id'",
         [],
         |row| row.get(0),
     )
-    .map_err(|_| error("STORAGE_FAILED"))
+    .map_err(storage_error)
 }
 
 #[cfg(test)]
@@ -92,6 +122,69 @@ mod tests {
     use super::*;
     use crate::test_support::TestDirectory;
     use rusqlite::params;
+
+    #[test]
+    fn damaged_cache_pages_stop_startup_without_changing_user_records_or_the_file() {
+        let directory = TestDirectory::new();
+        let path = directory.path().join("damaged.sqlite3");
+        let db = open_database(&path).unwrap();
+        db.execute(
+            "INSERT INTO records VALUES('annotations','note','original note')",
+            [],
+        )
+        .unwrap();
+        let root: u32 = db
+            .query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name='reading_blocks'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let page_size: u32 = db
+            .pragma_query_value(None, "page_size", |row| row.get(0))
+            .unwrap();
+        drop(db);
+        let mut damaged = std::fs::read(&path).unwrap();
+        damaged[((root - 1) * page_size) as usize] = 0x7f;
+        std::fs::write(&path, &damaged).unwrap();
+
+        assert_eq!(open_database(&path).unwrap_err().code, "STORAGE_CORRUPTED");
+        assert_eq!(std::fs::read(&path).unwrap(), damaged);
+        let db = Connection::open(&path).unwrap();
+        assert_eq!(
+            db.query_row::<String, _, _>("SELECT value FROM records WHERE id='note'", [], |row| {
+                row.get(0)
+            })
+            .unwrap(),
+            "original note"
+        );
+        assert!(!directory.path().read_dir().unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("readweave-before")));
+    }
+
+    #[test]
+    fn storage_errors_distinguish_corruption_space_permissions_and_locks_without_details() {
+        for (number, expected) in [
+            (rusqlite::ffi::SQLITE_CORRUPT, "STORAGE_CORRUPTED"),
+            (rusqlite::ffi::SQLITE_NOTADB, "STORAGE_CORRUPTED"),
+            (rusqlite::ffi::SQLITE_FULL, "STORAGE_FULL"),
+            (rusqlite::ffi::SQLITE_READONLY, "STORAGE_READ_ONLY"),
+            (rusqlite::ffi::SQLITE_PERM, "STORAGE_READ_ONLY"),
+            (rusqlite::ffi::SQLITE_BUSY, "STORAGE_BUSY"),
+            (rusqlite::ffi::SQLITE_LOCKED, "STORAGE_BUSY"),
+            (rusqlite::ffi::SQLITE_IOERR, "STORAGE_FAILED"),
+        ] {
+            let failure = storage_error(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(number),
+                Some("private path, content and credentials".into()),
+            ));
+            assert_eq!(failure.code, expected);
+            assert!(!failure.message.contains("private"));
+        }
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

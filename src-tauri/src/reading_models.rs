@@ -25,7 +25,11 @@ pub fn error(code: &'static str) -> CoreError {
         "EVIDENCE_MISMATCH" => "引用内容与已保存的原文记录不一致，请核对备份。",
         "SCHEMA_TOO_NEW" => "数据库由更新版本创建，请使用相应版本打开。",
         "MIGRATION_BACKUP_FAILED" => "升级前备份失败，数据库升级已停止。",
-        "STORAGE_FAILED" => "原文或引用保存失败，请检查设备存储。",
+        "STORAGE_CORRUPTED" => "本地数据库校验失败，现有文件已保留。请先备份，再修复数据库。",
+        "STORAGE_FULL" => "设备存储空间不足，暂时无法保存阅读数据。",
+        "STORAGE_READ_ONLY" => "无法写入本地数据库，请检查应用数据目录的权限。",
+        "STORAGE_BUSY" => "本地数据库正被占用，请关闭其他 ReadWeave 窗口后重试。",
+        "STORAGE_FAILED" => "阅读数据保存失败，请重新打开书籍；若仍失败，请保留数据目录以便排查。",
         _ => "原生阅读服务暂不可用。",
     };
     CoreError { code, message }

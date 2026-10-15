@@ -43,6 +43,10 @@ export type ToolErrorCode =
   | 'ANCHOR_STALE'
   | 'EVIDENCE_MISMATCH'
   | 'STORAGE_FAILED'
+  | 'STORAGE_CORRUPTED'
+  | 'STORAGE_FULL'
+  | 'STORAGE_READ_ONLY'
+  | 'STORAGE_BUSY'
 export class ReadingToolError extends Error {
   constructor(
     public code: ToolErrorCode,
