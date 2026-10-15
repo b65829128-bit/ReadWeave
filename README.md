@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.6`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.7`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -45,7 +45,7 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.6_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.7_x64-setup.exe
 ```
 
 这是未签名的开发预览包。Windows 11 是产品目标，实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
@@ -54,7 +54,7 @@ Windows 启动失败会显示“ReadWeave 启动诊断”，列出具体步骤�
 
 本机 alpha.3 / alpha.4 / alpha.5 的秒退已定位为生成 EXE 继承构建目录的 Low 完整性标记，导致无法写入用户数据。当前本地交付文件已修正为正常用户的 Medium 标记，alpha.5 已实际恢复书架，旧记录完整保留。用户确认《资治通鉴》在 Windows 应用中导入成功，性能问题仍待排查；打包流程的自动检查尚待补齐，详情见验证记录。
 
-alpha.6 已处理该书导入和打开时的主要耗时，并修复 Windows 目录重定向下数据库主文件与日志位置不一致导致的保存失败；没有重置书库、笔记或问答。当前本机交付文件继续核对 Medium 标记。
+alpha.6 已处理该书导入和打开时的主要耗时；随后用户日常双击启动仍遇到所有书保存失败。alpha.7 已确认实际使用的数据库损坏，完成保留原库备份的数据恢复，并增加启动前完整性检查及按原因区分的存储错误。测试环境与资源管理器的数据视图差异、恢复范围及实际验收见 [数据库修复记录](docs/storage-recovery.md)。当前本机交付文件继续核对 Medium 标记。
 
 首次升级旧数据库前会在数据库旁生成一致性 SQLite 备份，保留书籍、标注、问答与进度。迁移范围、回滚方式及来源校验边界见 [原生阅读核心](docs/native-reading-core.md)。
 
