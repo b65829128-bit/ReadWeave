@@ -4,12 +4,13 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.5`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.6`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
 - 导入无 DRM、可重排 EPUB，离线书架、目录、分页、字号、行距、三种主题和位置恢复。
 - 正文最多 100,000 段，兼容 `&nbsp;` 等标准 HTML 命名实体；两本用户指定的本地书已完成导入 / 阅读 / 重开与原生保存验证，范围见 [EPUB 兼容性记录](docs/epub-compatibility.md)。
+- 大书导入只解析一次，同次运行中重开当前书复用已校验内容并保留最新位置。《资治通鉴》的实测与验证范围见 [大书性能记录](docs/epub-performance.md)。
 - 划线后提问、高亮和笔记；重选已有高亮可取消，不叠加重复高亮；点击书内标注查看、编辑或删除笔记。
 - 可独立收起目录和阅读伙伴；全屏沉浸阅读，点击中间唤醒控件、两侧翻页；选文时保留标注操作。
 - 连接自己的 Chat Completions 兼容模型服务，流式回答、追问、取消、数学排版和返回提问位置。
@@ -44,7 +45,7 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.5_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.6_x64-setup.exe
 ```
 
 这是未签名的开发预览包。Windows 11 是产品目标，实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
@@ -52,6 +53,8 @@ src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.5_x64-setup.exe
 Windows 启动失败会显示“ReadWeave 启动诊断”，列出具体步骤和错误代码；安装目录可写时，还会在 EXE 旁留下 `ReadWeave-startup-error.log`。报告仅包含应用版本、固定步骤、错误代码和静态说明，不包含书籍、模型设置或密钥。界面缓存使用独立的 `webview-v1` 目录，书籍与记录继续使用原来的本地存储。
 
 本机 alpha.3 / alpha.4 / alpha.5 的秒退已定位为生成 EXE 继承构建目录的 Low 完整性标记，导致无法写入用户数据。当前本地交付文件已修正为正常用户的 Medium 标记，alpha.5 已实际恢复书架，旧记录完整保留。用户确认《资治通鉴》在 Windows 应用中导入成功，性能问题仍待排查；打包流程的自动检查尚待补齐，详情见验证记录。
+
+alpha.6 已处理该书导入和打开时的主要耗时，并修复 Windows 目录重定向下数据库主文件与日志位置不一致导致的保存失败；没有重置书库、笔记或问答。当前本机交付文件继续核对 Medium 标记。
 
 首次升级旧数据库前会在数据库旁生成一致性 SQLite 备份，保留书籍、标注、问答与进度。迁移范围、回滚方式及来源校验边界见 [原生阅读核心](docs/native-reading-core.md)。
 
@@ -107,7 +110,7 @@ tests/                契约、安全和浏览器流程测试
 docs/                 原方案、工程决策、验证记录和开发计划
 ```
 
-阅读引擎固定到 foliate-js 提交 `78914aef4466eb960965702401634c2cb348e9b1`，包含三组可复现补丁，见 [VENDOR.md](src/vendor/foliate/VENDOR.md)。数学依赖统一使用已修复旧版本问题的 KaTeX，锁文件避免嵌套依赖退回旧版。
+阅读引擎固定到 foliate-js 提交 `78914aef4466eb960965702401634c2cb348e9b1`，包含四组可复现补丁，见 [VENDOR.md](src/vendor/foliate/VENDOR.md)。数学依赖统一使用已修复旧版本问题的 KaTeX，锁文件避免嵌套依赖退回旧版。
 
 ## 尚未完成
 
