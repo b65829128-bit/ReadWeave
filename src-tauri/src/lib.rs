@@ -6,6 +6,7 @@ use tauri::{ipc::Channel, Manager, State};
 use tokio::sync::watch;
 
 mod book_files;
+mod credentials;
 mod database;
 mod reading;
 mod reading_commands;
@@ -20,6 +21,7 @@ struct AppState {
     books: PathBuf,
     requests: Mutex<HashMap<String, watch::Sender<bool>>>,
     reading: Mutex<reading::ReadingCore>,
+    credentials: Mutex<credentials::CredentialVault>,
 }
 
 fn check_collection(collection: &str) -> Result<(), String> {
@@ -194,11 +196,10 @@ async fn book_blob_get(
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CompletionRequest {
     request_id: String,
     endpoint: String,
-    api_key: String,
     body: serde_json::Value,
 }
 
@@ -218,6 +219,40 @@ fn check_endpoint(endpoint: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
+fn is_loopback_url(url: &reqwest::Url) -> bool {
+    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+}
+
+#[tauri::command]
+fn credential_has(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "CREDENTIAL_STORAGE_UNAVAILABLE".to_string())?
+        .has_secret()
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
+fn credential_set(api_key: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "CREDENTIAL_STORAGE_UNAVAILABLE".to_string())?
+        .set_secret(api_key)
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
+fn credential_delete(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "CREDENTIAL_STORAGE_UNAVAILABLE".to_string())?
+        .delete_secret()
+        .map_err(str::to_owned)
+}
+
 #[tauri::command]
 async fn completion_stream(
     request: CompletionRequest,
@@ -226,18 +261,29 @@ async fn completion_stream(
 ) -> Result<(), String> {
     check_id(&request.request_id)?;
     let url = check_endpoint(&request.endpoint)?;
-    if request.api_key.len() > 8192 || request.body.to_string().len() > 512 * 1024 {
+    if request.body.to_string().len() > 512 * 1024 {
         return Err("REQUEST_TOO_LARGE".into());
     }
+    let api_key = if is_loopback_url(&url) {
+        None
+    } else {
+        state
+            .credentials
+            .lock()
+            .map_err(|_| "CREDENTIAL_STORAGE_UNAVAILABLE")?
+            .get_secret()
+            .map_err(str::to_owned)?
+    };
+    let request_id = request.request_id.clone();
     let (tx, mut cancel) = watch::channel(false);
     {
         let mut requests = state.requests.lock().map_err(|_| "NETWORK_UNAVAILABLE")?;
-        if requests.len() >= 4 || requests.contains_key(&request.request_id) {
+        if requests.len() >= 4 || requests.contains_key(&request_id) {
             return Err("TOO_MANY_REQUESTS".into());
         }
-        requests.insert(request.request_id.clone(), tx);
+        requests.insert(request_id.clone(), tx);
     }
-    let task = async {
+    let task = async move {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(600))
@@ -247,8 +293,9 @@ async fn completion_stream(
             .post(url)
             .header("Content-Type", "application/json")
             .json(&request.body);
-        if !request.api_key.is_empty() {
-            builder = builder.bearer_auth(&request.api_key);
+        if let Some(api_key) = api_key {
+            let api_key = std::str::from_utf8(&api_key).map_err(|_| "INVALID_STORED_CREDENTIAL")?;
+            builder = builder.bearer_auth(api_key);
         }
         let response = builder.send().await.map_err(|_| "NETWORK_REQUEST_FAILED")?;
         if !response.status().is_success() {
@@ -274,7 +321,7 @@ async fn completion_stream(
         .requests
         .lock()
         .map_err(|_| "NETWORK_UNAVAILABLE")?
-        .remove(&request.request_id);
+        .remove(&request_id);
     result
 }
 
@@ -317,6 +364,7 @@ pub fn run() {
                     books,
                     requests: Mutex::new(HashMap::new()),
                     reading: Mutex::new(reading),
+                    credentials: Mutex::new(credentials::CredentialVault::platform()),
                 });
                 let config = app.config().app.windows[0].clone();
                 tauri::WebviewWindowBuilder::from_config(app.handle(), &config)
@@ -340,6 +388,9 @@ pub fn run() {
             book_blob_put,
             book_blob_put_binary,
             book_blob_get,
+            credential_has,
+            credential_set,
+            credential_delete,
             completion_stream,
             completion_cancel,
             reading_register_book,
@@ -383,5 +434,29 @@ mod tests {
         ] {
             assert!(check_endpoint(url).is_err());
         }
+    }
+
+    #[test]
+    fn completion_ipc_does_not_accept_api_keys() {
+        let request = serde_json::json!({
+            "requestId": "request_1",
+            "endpoint": "https://example.com/v1/chat/completions",
+            "body": {},
+            "apiKey": "must-not-cross-ipc"
+        });
+        assert!(serde_json::from_value::<CompletionRequest>(request).is_err());
+    }
+
+    #[test]
+    fn loopback_endpoints_never_receive_a_saved_credential() {
+        assert!(is_loopback_url(
+            &reqwest::Url::parse("http://127.0.0.1:1234/v1").unwrap()
+        ));
+        assert!(is_loopback_url(
+            &reqwest::Url::parse("http://[::1]:1234/v1").unwrap()
+        ));
+        assert!(!is_loopback_url(
+            &reqwest::Url::parse("https://example.com/v1").unwrap()
+        ));
     }
 }

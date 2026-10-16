@@ -74,6 +74,14 @@ type Screen = 'library' | 'reader' | 'notes' | 'actions'
 const scopeLabels = { 'to-position': '截至提问位置', chapter: '当前章节', book: '整本书' }
 const uniqueId = () => crypto.randomUUID()
 
+function allowsKeylessModelEndpoint(endpoint: string): boolean {
+  try {
+    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(endpoint).hostname)
+  } catch {
+    return false
+  }
+}
+
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className={`brand ${compact ? 'brand-compact' : ''}`}>
@@ -99,6 +107,7 @@ export default function App() {
   const [preferences, setPreferences] = useState(defaultPreferences)
   const [model, setModel] = useState(defaultModel)
   const [apiKey, setApiKey] = useState('')
+  const [hasApiKey, setHasApiKey] = useState(false)
   const [configured, setConfigured] = useState(false)
   const [loaded, setLoaded] = useState<LoadedBook | null>(null)
   const [loading, setLoading] = useState('正在整理你的书架…')
@@ -194,10 +203,15 @@ export default function App() {
   useEffect(() => {
     mounted.current = true
     void (async () => {
-      const [savedPreferences, savedModel, seeded] = await Promise.all([
+      const hasCredential = storage.credentialHas().catch((error) => {
+        notify(error instanceof Error ? error : '无法读取系统安全凭据。')
+        return false
+      })
+      const [savedPreferences, savedModel, seeded, savedCredential] = await Promise.all([
         storage.get('settings', 'preferences'),
         storage.get('settings', 'model'),
         storage.get('settings', 'initialized'),
+        hasCredential,
       ])
       const nextPreferences = preferencesSchema.safeParse(savedPreferences)
       const nextModel = modelSettingsSchema.safeParse(savedModel)
@@ -205,6 +219,8 @@ export default function App() {
       const initialModel = nextModel.success ? nextModel.data : defaultModel
       setPreferences(initialPreferences)
       setModel(initialModel)
+      setHasApiKey(savedCredential)
+      setConfigured(savedCredential || allowsKeylessModelEndpoint(initialModel.endpoint))
       await storage.put('settings', 'preferences', initialPreferences)
       await storage.put('settings', 'model', initialModel)
       if (!seeded) {
@@ -1359,17 +1375,47 @@ export default function App() {
       {showSettings && (
         <SettingsDialog
           settings={model}
-          apiKey={apiKey}
+          apiKey={isTauri() ? '' : apiKey}
+          hasApiKey={hasApiKey || (!isTauri() && !!apiKey)}
+          secureStorage={isTauri()}
           preferences={preferences}
-          onSave={async (settings, key) => {
+          onSave={async (settings, credentialChange) => {
             const checked = modelSettingsSchema.parse(settings)
             cancel()
             await storage.put('settings', 'model', checked)
             setModel(checked)
-            setApiKey(key)
-            setConfigured(true)
+            let nextHasApiKey = hasApiKey
+            if (isTauri()) {
+              if (credentialChange.kind === 'set') {
+                await storage.credentialSet(credentialChange.value)
+                nextHasApiKey = true
+              } else if (credentialChange.kind === 'delete') {
+                await storage.credentialDelete()
+                nextHasApiKey = false
+              }
+            } else if (credentialChange.kind === 'set') {
+              setApiKey(credentialChange.value)
+              nextHasApiKey = true
+            } else if (credentialChange.kind === 'delete') {
+              setApiKey('')
+              nextHasApiKey = false
+            }
+            setHasApiKey(nextHasApiKey)
+            setConfigured(nextHasApiKey || allowsKeylessModelEndpoint(checked.endpoint))
             grants.current.clear()
-            notify('模型设置已保存，密钥仅用于本次运行。')
+            if (credentialChange.kind === 'delete') {
+              notify(
+                isTauri()
+                  ? '模型设置已保存，已删除本机保存的密钥。'
+                  : '模型设置已保存，已清除本次运行中的密钥。',
+              )
+            } else {
+              notify(
+                isTauri()
+                  ? '模型设置已保存，密钥保存在本机系统安全凭据区。'
+                  : '模型设置已保存，浏览器中的密钥只保留在本次运行内存。',
+              )
+            }
           }}
           onPreferences={savePreferences}
           onExport={exportBackup}
@@ -1565,7 +1611,7 @@ export default function App() {
           </p>
           <p className="muted">
             同 ID
-            的记录会被备份覆盖，其他记录会保留。恢复前先下载当前数据的备份；服务密钥不会恢复。若不包含原书，需要重新导入相同
+            的记录会被备份覆盖，其他记录会保留。恢复前先下载当前数据的备份；密钥不在备份中，现有已保存密钥会保留。若不包含原书，需要重新导入相同
             EPUB。
           </p>
           <div className="modal-footer">
@@ -1585,14 +1631,15 @@ export default function App() {
                   await restoreBackup(restorePreview)
                   setPreferences(restorePreview.preferences)
                   setModel(restorePreview.model)
-                  setApiKey('')
-                  setConfigured(false)
+                  setConfigured(
+                    hasApiKey || allowsKeylessModelEndpoint(restorePreview.model.endpoint),
+                  )
                   grants.current.clear()
                   setRestorePreview(null)
                   setShowSettings(false)
                   changeScreen('library')
                   await refreshData()
-                  notify('数据已恢复。模型密钥需要重新输入。')
+                  notify('数据已恢复；备份不会改变已保存的模型密钥。')
                 })().catch(notify)
               }}
             >
@@ -1692,7 +1739,7 @@ export default function App() {
           <Brand />
           <p>在原文旁理解，顺畅继续阅读。</p>
           <p className="muted">
-            v0.1.0-alpha.7 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
+            v0.1.0-alpha.8 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
             foliate-js。正式目标为 Windows 11 与 Android 平板。
           </p>
           <div className="inline-notice">
@@ -1704,8 +1751,8 @@ export default function App() {
             </span>
           </div>
           <p className="muted small">
-            Android 真机、真实模型双服务验收、Hermes / Connector / MCP
-            和安全凭据持久化尚未完成。当前未启用外部搜索、PDF / OCR 或可执行插件。
+            Android 连续选区、旋转和键盘变化仍待验收；真实模型双服务、Hermes / Connector / MCP
+            尚未完成。当前未启用外部搜索、PDF / OCR 或可执行插件。
           </p>
           <p className="small">自研代码 Apache-2.0 · foliate-js MIT · 示例书 CC0</p>
         </Modal>

@@ -1,7 +1,7 @@
 {
   "name": "readweave",
   "private": true,
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0-alpha.8",
   "description": "在原文旁理解，顺畅继续阅读。",
   "type": "module",
   "license": "Apache-2.0",
@@ -21,6 +21,7 @@
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "android:init": "tauri android init",
+    "android:prepare": "node scripts/prepare-android.mjs",
     "android:dev": "tauri android dev",
     "samples": "node scripts/generate-samples.mjs",
     "format": "prettier --write .",

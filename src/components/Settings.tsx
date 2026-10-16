@@ -68,6 +68,8 @@ export function Appearance({
 export function SettingsDialog({
   settings,
   apiKey,
+  hasApiKey,
+  secureStorage,
   preferences,
   onSave,
   onPreferences,
@@ -77,8 +79,13 @@ export function SettingsDialog({
 }: {
   settings: ModelSettings
   apiKey: string
+  hasApiKey: boolean
+  secureStorage: boolean
   preferences: Preferences
-  onSave(settings: ModelSettings, apiKey: string): Promise<void>
+  onSave(
+    settings: ModelSettings,
+    credentialChange: { kind: 'keep' } | { kind: 'set'; value: string } | { kind: 'delete' },
+  ): Promise<void>
   onPreferences(preferences: Preferences): void
   onExport(includeOriginals: boolean): Promise<void>
   onRestore(): void
@@ -87,6 +94,7 @@ export function SettingsDialog({
   const [tab, setTab] = useState<'model' | 'reading' | 'data'>('model')
   const [draft, setDraft] = useState(settings)
   const [key, setKey] = useState(apiKey)
+  const [keyChange, setKeyChange] = useState<'keep' | 'delete'>('keep')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [includeOriginals, setIncludeOriginals] = useState(false)
@@ -95,14 +103,20 @@ export function SettingsDialog({
     setError('')
     try {
       const endpoint = completionEndpoint(draft.endpoint)
-      if (!key.trim() && !['localhost', '127.0.0.1', '[::1]'].includes(new URL(endpoint).hostname))
+      const availableKey = key.trim() || (hasApiKey && keyChange !== 'delete')
+      const deletingKey = !key.trim() && keyChange === 'delete'
+      if (
+        !availableKey &&
+        !deletingKey &&
+        !['localhost', '127.0.0.1', '[::1]'].includes(new URL(endpoint).hostname)
+      )
         throw new Error('请输入密钥；无需密钥的本机服务可以留空。')
       if (!draft.model.trim() || !draft.systemPrompt.trim())
         throw new Error('请填写模型名称和回答偏好。')
       setSaving(true)
       await onSave(
         { ...draft, endpoint: draft.endpoint.trim(), model: draft.model.trim() },
-        key.trim(),
+        key.trim() ? { kind: 'set', value: key.trim() } : { kind: keyChange },
       )
       onClose()
     } catch (error) {
@@ -255,14 +269,32 @@ export function SettingsDialog({
               spellCheck={false}
               value={key}
               maxLength={8192}
-              onChange={(event) => setKey(event.target.value)}
-              placeholder="仅保留在本次运行的内存中"
+              onChange={(event) => {
+                setKey(event.target.value)
+                if (event.target.value) setKeyChange('keep')
+                else if (hasApiKey) setKeyChange('delete')
+              }}
+              placeholder={hasApiKey ? '已保存；留空保留当前密钥' : '输入服务密钥'}
             />
           </label>
+          {hasApiKey && (
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                setKey('')
+                setKeyChange((current) => (current === 'delete' ? 'keep' : 'delete'))
+              }}
+            >
+              {keyChange === 'delete' ? '取消删除密钥' : '删除已保存密钥'}
+            </button>
+          )}
           <div className="inline-notice">
             <LockKeyhole size={17} />
             <span>
-              密钥在关闭应用后清除，不写入书籍数据库或默认备份。安全凭据持久化尚在验证中。
+              {secureStorage
+                ? '密钥保存在本机系统安全凭据区，由 Windows 凭据管理器或 Android Keystore 保护；不进入书籍数据库或备份。输入新密钥可替换，留空会保留当前密钥。'
+                : '浏览器预览中的密钥只保存在当前运行内存，关闭或刷新后清除；不写入本地数据库或备份。'}
             </span>
           </div>
           <label className="field">

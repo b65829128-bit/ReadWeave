@@ -34,6 +34,30 @@ async function transaction<T>(
 }
 
 export const storage = {
+  async credentialHas(): Promise<boolean> {
+    if (!isTauri()) return false
+    try {
+      return await invoke('credential_has')
+    } catch {
+      throw new Error('无法读取本机系统安全凭据，请检查系统凭据存储。')
+    }
+  },
+  async credentialSet(apiKey: string): Promise<void> {
+    if (!isTauri()) throw new Error('浏览器预览不提供密钥持久化。')
+    try {
+      await invoke('credential_set', { apiKey })
+    } catch {
+      throw new Error('无法保存到本机系统安全凭据，请检查系统凭据存储。')
+    }
+  },
+  async credentialDelete(): Promise<void> {
+    if (!isTauri()) return
+    try {
+      await invoke('credential_delete')
+    } catch {
+      throw new Error('无法从本机系统安全凭据中删除密钥。')
+    }
+  },
   async list<T>(collection: Collection): Promise<T[]> {
     return isTauri()
       ? invoke('records_list', { collection })

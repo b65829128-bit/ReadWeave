@@ -94,7 +94,7 @@ export const compatibleProvider: ProviderAdapter = {
       signal.addEventListener('abort', cancel, { once: true })
       try {
         await invoke('completion_stream', {
-          request: { requestId, endpoint, apiKey: config.apiKey, body },
+          request: { requestId, endpoint, body },
           channel,
         })
         if (parseError) throw parseError

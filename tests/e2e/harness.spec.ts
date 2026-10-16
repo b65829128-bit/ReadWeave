@@ -224,3 +224,25 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
   await page.getByRole('button', { name: '打开设置' }).click()
   await expect(page.getByLabel('服务密钥', { exact: true })).toHaveValue('')
 })
+
+test('deleting a saved key allows a remote model configuration to be saved', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await page.getByRole('textbox', { name: '服务地址' }).fill(endpoint)
+  await page.getByLabel('模型名称', { exact: true }).fill('fixture-model')
+  await page.getByLabel('服务密钥', { exact: true }).fill('synthetic-delete-test-key')
+  await page.getByRole('button', { name: '保存设置' }).click()
+
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await page.getByRole('button', { name: '删除已保存密钥' }).click()
+  await page.getByRole('button', { name: '保存设置' }).click()
+  await expect(page.getByText('模型设置已保存，已清除本次运行中的密钥。')).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await expect(page.getByRole('button', { name: '删除已保存密钥' })).toHaveCount(0)
+  await expect(page.getByLabel('服务密钥', { exact: true })).toHaveAttribute(
+    'placeholder',
+    '输入服务密钥',
+  )
+})

@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ReadWeave",
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0-alpha.8",
   "identifier": "app.readweave.reader",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run android:prepare && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
