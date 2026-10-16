@@ -1,6 +1,6 @@
 # 验证记录
 
-日期：2026-10-16。版本：`0.1.0-alpha.11`。以下记录本工作区已执行的检查，不代表原方案第 12 节已全部验收。alpha.2 至 alpha.10 的记录保留为历史证据。
+日期：2026-10-17。版本：`0.1.0-alpha.11`。以下记录本工作区已执行的检查，不代表原方案第 12 节已全部验收。alpha.2 至 alpha.10 的记录保留为历史证据。
 
 ## 环境
 
@@ -13,6 +13,16 @@
 - Android SDK `37`、NDK `27.2.12479018`、JDK `25.0.4.1`；Android arm64 release 目标为 minSdk `31` / targetSdk `37`。
 - ADB 真机：OPPO `OPD2513`，Android `16` / API `36`，ABI `arm64-v8a`。
 - 本轮设备系统 WebView：`com.google.android.webview`，`138.0.7204.179`，物理密度 `420` / DPR `2.625`。
+
+## AstrBot 接入目标与公开接口预检（2026-10-16）
+
+用户决定首个外部 Harness 改用 AstrBot v4.27.4 内置 Agent，暂时固定版本。用户现有服务为 Debian 源码部署、有公网 IP / HTTP 端口、无域名；实际部署提交仍待服务器核对。官方标签对应提交 `4fe29759758255a35ad01ea6177a91c2293bfcd3`，本次已核对该提交的 HTTP API 文档、Chat 路由 / 服务与 MCP 客户端源码。
+
+对用户提供实例的根页面和 `/api/v1/openapi.json` 进行无鉴权 GET，均返回 HTTP 200。公开 schema 包含 `/api/v1/chat`、`/api/v1/chat/sessions` 和 `/api/v1/chat/sessions/{session_id}/stop`；`info.version: 1.0.0` 是接口描述版本，不能当作 AstrBot 部署版本。
+
+固定版本源码存在独立会话停止接口，且后台生成不随 SSE 订阅关闭自动停止。以上仅证明标签源码与公开接口描述可核对；没有创建 API Key、发送对话 / 模型请求、调用停止接口、执行 MCP 工具或修改远程服务。本轮调整计划文档，ReadWeave 运行版本仍为 alpha.11。网络准备、实施清单与待验收项见 [AstrBot 接入计划](astrbot-integration.md)。
+
+2026-10-17 文档变更检查：`npm run check` 通过，含 ESLint、72 / 72 项前端测试、严格 TypeScript 与生产构建；7 份变更文档的 45 个本地链接有效。Prettier 与 `git diff --check` 通过，原始产品方案未修改。本轮没有改动运行代码，未重跑浏览器流程、Rust 测试或原生打包；既有平台与模型验收范围不变。
 
 ## alpha.11 原生选区滚动与真实输入法修复
 
@@ -338,6 +348,6 @@ alpha.2 历史 NSIS 开发包：`src-tauri/target/release/bundle/nsis/ReadWeave_
 
 ## 尚无运行证据
 
-Android 连续触摸选区、旋转、软键盘与面板组合的完整验收；两个真实模型服务与原生完整商业模型工具循环；真实 Hermes / ACP / Connector / MCP 和外部调用身份；FTS5 与索引完成度；完整复合 Locator；真实获许可历史与技术书的问题集；连续一周自用与复杂书籍性能。APK 启动及 Android / Windows 本机密钥存储、重启和删除已有上文所列证据。
+Android 连续触摸选区、旋转、软键盘与面板组合的完整验收；两个真实模型服务与原生完整商业模型工具循环；AstrBot v4.27.4 内置 Agent 的鉴权执行 / Connector / MCP / 外部调用身份与公网 HTTPS / Android 双向链路；后续 Hermes / ACP 适配；FTS5 与索引完成度；完整复合 Locator；真实获许可历史与技术书的问题集；连续一周自用与复杂书籍性能。APK 启动及 Android / Windows 本机密钥存储、重启和删除已有上文所列证据。
 
 本机测试服务验证的是协议与应用行为，不能证明真实商业模型的解释质量、服务兼容或外部 Harness 能力。原创文本 EPUB 也不能替代扫描 PDF 或图片公式样本。

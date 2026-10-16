@@ -122,7 +122,7 @@ docs/                 原方案、工程决策、验证记录和开发计划
 ## 尚未完成
 
 - Android 连续选区、旋转、键盘、面板与长时间阅读仍待验收。alpha.8 arm64 APK 已在 Android 16 / API 36 真机启动，并完成系统密钥保存、重启保留和删除验证；配置为 minSdk 31 / targetSdk 37，WebView 最低版本仍需实测确定。详见 [验证记录](docs/validation.md)。
-- 两个真实模型服务验收，以及真实 Hermes ACP、Connector、MCP / rmcp 的双向接入。
+- 两个真实模型服务验收，以及 AstrBot v4.27.4 内置 Agent、Connector、MCP / rmcp 的双向接入；Hermes / ACP 后续适配。
 - 外部调用身份、MCP 配对与授权，以及外部会话打开 / 重连。内置问答已经通过 [统一任务与适配器入口](docs/task-runtime.md) 运行。
 - SQLite FTS5、中文预分词、分段索引状态。当前受限文本扫描明确返回 `indexStatus: scan`，不伪装成已完成的全文索引。
 - 数据库迁移 / 故障恢复长期验收、复杂 EPUB 样本与完整定位回退。
@@ -130,7 +130,7 @@ docs/                 原方案、工程决策、验证记录和开发计划
 
 EPUB 当前移除出版物 CSS、SVG 和主动内容，采用统一排版。复杂版式可能损失表现；标准文本与基础 MathML 路径仍需更多真实书籍样本验证。定位主要依赖清理后的 CFI，歧义文本不会自动跳转。参见 [开发计划](docs/roadmap.md)。
 
-本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。下一阶段先固定一个实际外部后端与版本，完成原生调用身份和最小授权通道，再验证真实外部 Harness 的工具回调、追问与取消。
+本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。首个外部后端已选定为 **AstrBot v4.27.4 内置 Agent**，使用现有 Debian 源码部署实例，暂时固定版本；部署版本仍需现场核对。下一阶段先验证会话与停止接口，再完成外部调用身份、最小授权和双向书内工具；实际接入尚未完成。网络准备、固定版本依据和验收步骤见 [AstrBot 接入计划](docs/astrbot-integration.md)。
 
 ## 许可
 
