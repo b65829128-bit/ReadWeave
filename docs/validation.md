@@ -14,6 +14,22 @@
 - ADB 真机：OPPO `OPD2513`，Android `16` / API `36`，ABI `arm64-v8a`。
 - 本轮设备系统 WebView：`com.google.android.webview`，`138.0.7204.179`，物理密度 `420` / DPR `2.625`。
 
+## AstrBot 真实 API 预检（2026-10-17）
+
+用户确认现有 Debian 实例由 uv 安装，版本 v4.27.4、内置 Agent。用户建立 SSH 隧道并确认网页与聊天可用后，本工作区通过本机转发入口执行实际 API 请求；版本信息来自用户确认，不将官方标签提交当作安装包溯源。具体步骤、事件结构和条件见 [AstrBot 接入计划](astrbot-integration.md)。
+
+- 专用密钥读取会话列表返回 HTTP 200 / `status: ok`；配置列表返回 403。此前无密钥会话请求返回 401。
+- 实际 SSE 首轮回答、同会话追问和新会话均正常结束；追问正确复述随机测试代号，新会话没有该代号。
+- 自定义用户名的会话读取 / 停止返回 HTTP 200 / `status: error` / `Permission denied`。固定版本源码表明通用路由检查 API Key 内部身份，和开放对话声明的用户名不同；不能忽略这一差异。
+- 在 API Key 自身身份的会话中，正文开始后停止返回 `stopped_count: 1`（187ms）；流随后关闭，读取会话为 `is_running: false`、`active_runs: []`。仍收到在途增量，累计 24 个正文片段 / 40 个字符，不承诺取消后零迟到事件。
+- 同一身份下，收到会话事件后、首个正文字前停止返回 `stopped_count: 1`（75ms），0 个正文增量；流结束后活动执行数为 0。
+
+为核对 API Key 自有会话的调用身份，仅创建了可清理的空项目与测试会话关联；临时项目 / 关联和两个受管理的测试会话已移除。自定义测试用户名下的 3 个合成会话因归属限制保留，没有扩大权限或触及用户既有会话。密钥仅在进程内存使用，随后清空并重置验证进程；脱敏结果位于 Git 忽略的 `.local/astrbot-preflight-20261017.json`，不含密钥或原始问答。
+
+本次未发送书籍、调用书内工具、签发引用、修改远程配置或实现 ReadWeave 外部适配器。真实模型型号 / 插件配置、MCP / 原生授权、公网 HTTPS、Android 链路及上游所有副作用的停止仍需独立验收；接口预检通过不等于完整外部 Harness 通过。
+
+本轮文档检查：`npm run check` 通过，含 72 / 72 项前端测试、ESLint、严格 TypeScript 与生产构建；7 份变更文档的 46 个本地链接有效，脱敏摘要与记录结论一致，未发现凭据形态值。Prettier、`git diff --check` 通过，原始产品方案未修改。运行代码未变，未重跑浏览器、Rust 或原生打包，不新增平台验收结论。
+
 ## AstrBot 接入目标与公开接口预检（2026-10-16）
 
 用户决定首个外部 Harness 改用 AstrBot v4.27.4 内置 Agent，暂时固定版本。用户现有服务为 Debian 源码部署、有公网 IP / HTTP 端口、无域名；实际部署提交仍待服务器核对。官方标签对应提交 `4fe29759758255a35ad01ea6177a91c2293bfcd3`，本次已核对该提交的 HTTP API 文档、Chat 路由 / 服务与 MCP 客户端源码。
@@ -348,6 +364,6 @@ alpha.2 历史 NSIS 开发包：`src-tauri/target/release/bundle/nsis/ReadWeave_
 
 ## 尚无运行证据
 
-Android 连续触摸选区、旋转、软键盘与面板组合的完整验收；两个真实模型服务与原生完整商业模型工具循环；AstrBot v4.27.4 内置 Agent 的鉴权执行 / Connector / MCP / 外部调用身份与公网 HTTPS / Android 双向链路；后续 Hermes / ACP 适配；FTS5 与索引完成度；完整复合 Locator；真实获许可历史与技术书的问题集；连续一周自用与复杂书籍性能。APK 启动及 Android / Windows 本机密钥存储、重启和删除已有上文所列证据。
+Android 连续触摸选区、旋转、软键盘与面板组合的完整验收；两个真实模型服务与原生完整商业模型工具循环；ReadWeave 对 AstrBot 的实际外部适配器 / Connector / MCP / 可信调用身份与公网 HTTPS / Android 双向链路；后续 Hermes / ACP 适配；FTS5 与索引完成度；完整复合 Locator；真实获许可历史与技术书的问题集；连续一周自用与复杂书籍性能。AstrBot 独立 API 预检、APK 启动及 Android / Windows 本机密钥存储、重启和删除已有上文所列证据。
 
 本机测试服务验证的是协议与应用行为，不能证明真实商业模型的解释质量、服务兼容或外部 Harness 能力。原创文本 EPUB 也不能替代扫描 PDF 或图片公式样本。

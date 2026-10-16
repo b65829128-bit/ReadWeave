@@ -130,7 +130,7 @@ docs/                 原方案、工程决策、验证记录和开发计划
 
 EPUB 当前移除出版物 CSS、SVG 和主动内容，采用统一排版。复杂版式可能损失表现；标准文本与基础 MathML 路径仍需更多真实书籍样本验证。定位主要依赖清理后的 CFI，歧义文本不会自动跳转。参见 [开发计划](docs/roadmap.md)。
 
-本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。首个外部后端已选定为 **AstrBot v4.27.4 内置 Agent**，使用现有 Debian 源码部署实例，暂时固定版本；部署版本仍需现场核对。下一阶段先验证会话与停止接口，再完成外部调用身份、最小授权和双向书内工具；实际接入尚未完成。网络准备、固定版本依据和验收步骤见 [AstrBot 接入计划](docs/astrbot-integration.md)。
+本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。首个外部后端已选定为 **AstrBot v4.27.4 内置 Agent**，使用现有 Debian / uv 安装实例，用户已确认版本。SSH 隧道下的真实 API 鉴权、流式回答、追问、新会话与两种停止时机已验证；停止要求后端会话归属与 API Key 身份一致。下一阶段实现正式调用身份与会话映射、外部 Harness 配置和受限书内工具，ReadWeave 实际接入尚未完成。证据、网络准备和验收步骤见 [AstrBot 接入计划](docs/astrbot-integration.md)。
 
 ## 许可
 
