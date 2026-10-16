@@ -8,7 +8,12 @@ import type {
 } from '../core/types'
 import type { ReadingTask } from '../core/reading-service'
 
-export type RunEvent = { runId: string; eventId: string; sequence: number } & (
+export type RunEvent = {
+  runId: string
+  sessionRef: string
+  eventId: string
+  sequence: number
+} & (
   | { type: 'text'; delta: string }
   | { type: 'reasoning'; delta: string }
   | { type: 'tool'; tool: ToolExecution }
@@ -23,6 +28,9 @@ export interface HarnessAdapter {
   submit(
     request: {
       tools: ReadingTask
+      runId: string
+      sessionRef: string
+      provider: ProviderAdapter
       question: string
       history: Message[]
       settings: ModelSettings
@@ -41,6 +49,7 @@ export interface KnowledgeSource {
 }
 export interface ProviderAdapter {
   id: string
+  capabilities: { streaming: boolean; tools: boolean; cancel: boolean }
   complete(
     body: Record<string, unknown>,
     config: ModelSettings & { apiKey: string },

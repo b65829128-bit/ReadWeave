@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from 'react'
 import {
   ArrowLeft,
   BookOpen,
@@ -49,6 +56,7 @@ import {
   type Message,
   type Preferences,
   type ReadingPoint,
+  type Snapshot,
 } from './core/types'
 import {
   defaultPack,
@@ -58,7 +66,7 @@ import {
   type InstalledPack,
   type ReadingAction,
 } from './core/plugins'
-import { readingService, type ReadingTask } from './core/reading-service'
+import { readingService } from './core/reading-service'
 import {
   createBackup,
   exportMarkdown,
@@ -68,7 +76,7 @@ import {
   restoreBackup,
   type Backup,
 } from './core/backup'
-import { builtinHarness } from './harness/builtin'
+import { createAssistantRuntime } from './harness'
 
 type Screen = 'library' | 'reader' | 'notes' | 'actions'
 const scopeLabels = { 'to-position': '截至提问位置', chapter: '当前章节', book: '整本书' }
@@ -141,18 +149,9 @@ export default function App() {
     bookVersion: string
   } | null>(null)
   const [draft, setDraft] = useState('')
-  const [conversation, setConversation] = useState<Conversation | null>(null)
-  const [running, setRunning] = useState(false)
-  const [preparing, setPreparing] = useState(false)
-  const [runStatus, setRunStatus] = useState('')
-  const [pending, setPending] = useState<{ tools: ReadingTask; question: string } | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [showBookSearch, setShowBookSearch] = useState(false)
   const reader = useRef<ReaderAdapter>(null)
-  const activeController = useRef<AbortController | null>(null)
-  const activeTools = useRef<ReadingTask | null>(null)
-  const pendingTask = useRef<ReadingTask | null>(null)
-  const preparingController = useRef<AbortController | null>(null)
   const bookOpenGeneration = useRef(0)
   const bookOpenController = useRef<AbortController | null>(null)
   const openedBook = useRef<LoadedBook | null>(null)
@@ -169,14 +168,30 @@ export default function App() {
   const notify = useCallback((error: unknown) => {
     setToast(error instanceof Error ? error.message : String(error))
   }, [])
-  const releaseTask = useCallback(
-    (task: ReadingTask | null) => {
-      void task?.revoke().catch((error) => {
+  const [taskRuntime] = useState(() =>
+    createAssistantRuntime({
+      save: (item) => storage.put('conversations', item.id, item),
+      onSaved: (item) => {
+        if (mounted.current)
+          setConversations((all) => [...all.filter((c) => c.id !== item.id), item])
+      },
+      onError: (error) => {
         if (mounted.current) notify(error)
-      })
-    },
-    [notify],
+      },
+    }),
   )
+  const {
+    phase,
+    conversation,
+    pending,
+    status: runStatus,
+  } = useSyncExternalStore(taskRuntime.subscribe, taskRuntime.getSnapshot, taskRuntime.getSnapshot)
+  const running = phase === 'running'
+  const preparing = phase === 'preparing'
+  const currentRunId = conversation?.messages.at(-1)?.run?.id
+  useEffect(() => {
+    if (currentRunId) setDraft('')
+  }, [currentRunId])
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(''), 7000)
@@ -219,6 +234,7 @@ export default function App() {
       const initialModel = nextModel.success ? nextModel.data : defaultModel
       setPreferences(initialPreferences)
       setModel(initialModel)
+      taskRuntime.setEnabled(initialModel.enabled)
       setHasApiKey(savedCredential)
       setConfigured(savedCredential || allowsKeylessModelEndpoint(initialModel.endpoint))
       await storage.put('settings', 'preferences', initialPreferences)
@@ -258,61 +274,20 @@ export default function App() {
       mounted.current = false
       bookOpenGeneration.current += 1
       bookOpenController.current?.abort()
-      preparingController.current?.abort()
-      activeController.current?.abort()
-      releaseTask(activeTools.current)
-      releaseTask(pendingTask.current)
+      taskRuntime.cancel()
       openedBook.current?.book.destroy()
     }
-  }, [notify, releaseTask])
+  }, [notify, taskRuntime])
 
   const cancel = () => {
-    preparingController.current?.abort()
-    preparingController.current = null
-    setPreparing(false)
-    releaseTask(activeTools.current)
-    releaseTask(pendingTask.current)
-    activeTools.current = null
-    pendingTask.current = null
-    setPending(null)
-    const controller = activeController.current
-    activeController.current = null
-    controller?.abort()
-    setRunning(false)
-    setRunStatus('')
-    if (controller)
-      setConversation((current) =>
-        current
-          ? {
-              ...current,
-              messages: current.messages.map((message) =>
-                message.role === 'assistant' && !message.status
-                  ? {
-                      ...message,
-                      status: 'cancelled',
-                      tools: message.tools?.map((tool) =>
-                        ['preparing', 'running'].includes(tool.status)
-                          ? { ...tool, status: 'cancelled', summary: '已停止' }
-                          : tool,
-                      ),
-                    }
-                  : message,
-              ),
-            }
-          : null,
-      )
+    taskRuntime.cancel()
   }
   const dismissPreview = () => {
-    releaseTask(pendingTask.current)
-    if (pendingTask.current === activeTools.current) activeTools.current = null
-    pendingTask.current = null
-    setPending(null)
+    taskRuntime.cancel()
   }
   const newTopic = () => {
-    cancel()
-    setConversation(null)
+    taskRuntime.reset()
     setDraft('')
-    setPending(null)
   }
   const exitImmersive = useCallback(() => {
     immersiveRef.current = false
@@ -434,7 +409,7 @@ export default function App() {
       setLoaded(next)
       setPosition(locator ?? record.position ?? null)
       setSelection(null)
-      setConversation(null)
+      taskRuntime.reset()
       setDraft('')
       setScreen('reader')
       setLoading('正在排版…')
@@ -566,175 +541,39 @@ export default function App() {
       message.content,
     )
   }
-  const grantKey = (tools: ReadingTask) =>
-    `${model.endpoint}|${model.model}|${tools.snapshot.bookVersion}|${tools.snapshot.scope}`
-
-  const startRun = async (tools: ReadingTask, question: string) => {
-    if (!loaded || activeController.current || tools.snapshot.bookId !== loaded.record.id) return
-    const controller = new AbortController()
-    activeController.current = controller
-    activeTools.current = tools
-    const assistantId = uniqueId()
-    const previous = conversation?.snapshot.id === tools.snapshot.id ? conversation : null
-    const history = previous?.messages ?? []
-    let current: Conversation = previous
-      ? { ...previous, messages: [...previous.messages] }
-      : {
-          id: uniqueId(),
-          bookId: loaded.record.id,
-          snapshot: structuredClone(tools.snapshot),
-          messages: [],
-          evidence: tools.allEvidence(),
-          createdAt: new Date().toISOString(),
-        }
-    current.messages.push(
-      { id: uniqueId(), role: 'user', content: question },
-      { id: assistantId, role: 'assistant', content: '' },
-    )
-    setConversation(current)
-    setDraft('')
-    pendingTask.current = null
-    setPending(null)
-    setRunning(true)
-    setShowAssistant(true)
-    const publish = () => {
-      if (activeController.current === controller)
-        setConversation({
-          ...current,
-          messages: [...current.messages],
-          evidence: [...current.evidence],
-        })
-    }
-    const updateAnswer = (transform: (message: Message) => Message) => {
-      current = {
-        ...current,
-        messages: current.messages.map((message) =>
-          message.id === assistantId ? transform(message) : message,
-        ),
-      }
-      publish()
-    }
-    try {
-      await builtinHarness.submit(
-        { tools, question, history, settings: model, apiKey, signal: controller.signal },
-        (event) => {
-          if (
-            controller.signal.aborted ||
-            event.runId !== tools.runId ||
-            activeController.current !== controller
-          )
-            return
-          if (event.type === 'text')
-            updateAnswer((message) => ({ ...message, content: message.content + event.delta }))
-          if (event.type === 'reasoning')
-            updateAnswer((message) => ({
-              ...message,
-              reasoning: (message.reasoning ?? '') + event.delta,
-            }))
-          if (event.type === 'tool')
-            updateAnswer((message) => ({
-              ...message,
-              tools: [
-                ...(message.tools ?? []).filter((tool) => tool.id !== event.tool.id),
-                event.tool,
-              ],
-            }))
-          if (event.type === 'protocol')
-            updateAnswer((message) => ({ ...message, protocol: event.messages }))
-          if (event.type === 'status') setRunStatus(event.text)
-          if (event.type === 'evidence') {
-            current = { ...current, evidence: event.fragments }
-            publish()
-          }
-        },
-      )
-      updateAnswer((message) => ({ ...message, status: 'done' }))
-    } catch (error) {
-      updateAnswer((message) => ({
-        ...message,
-        status: controller.signal.aborted ? 'cancelled' : 'error',
-        tools: message.tools?.map((tool) =>
-          ['preparing', 'running'].includes(tool.status)
-            ? {
-                ...tool,
-                status: controller.signal.aborted ? 'cancelled' : 'error',
-                summary: controller.signal.aborted ? '已停止' : '此次调用未完成',
-              }
-            : tool,
-        ),
-      }))
-      if (!controller.signal.aborted)
-        notify(
-          error instanceof TypeError
-            ? new Error(
-                '无法连接模型服务。请检查网络和地址；浏览器预览还需要服务支持跨域，Windows 客户端不受此限制。',
-              )
-            : error,
-        )
-    } finally {
-      current = { ...current, evidence: tools.allEvidence() }
-      try {
-        await storage.put('conversations', current.id, current)
-        setConversations((all) => [...all.filter((c) => c.id !== current.id), current])
-      } catch (error) {
-        notify(error)
-      }
-      if (activeController.current === controller) {
-        publish()
-        activeController.current = null
-        setRunning(false)
-        setRunStatus('')
-      }
-    }
-  }
+  const grantKey = (snapshot: Snapshot) =>
+    JSON.stringify([
+      taskRuntime.harnesses.selectedId,
+      taskRuntime.providers.selectedId,
+      model.endpoint,
+      model.model,
+      snapshot.bookVersion,
+      snapshot.scope,
+    ])
   const ask = async (question: string) => {
-    if (
-      !question.trim() ||
-      activeController.current ||
-      preparingController.current ||
-      pendingTask.current ||
-      !loaded
-    )
-      return
+    if (!question.trim() || phase !== 'idle' || !loaded) return
     setDraft(question)
     setShowAssistant(true)
     setControlsVisible(true)
-    if (!configured) {
+    if (!configured || !model.enabled) {
       setShowSettings(true)
+      if (!model.enabled) notify('阅读伙伴已停用，可在设置中重新启用。')
       return
     }
-    const controller = new AbortController()
-    preparingController.current = controller
-    setPreparing(true)
-    try {
-      let tools = activeTools.current
-      if (!tools || !conversation || tools.snapshot.id !== conversation.snapshot.id) {
-        const point = capture()
-        if (!point) return
-        tools = await readingService.create(
-          loaded.record,
-          loaded.paragraphs,
-          point,
-          preferences.scope,
-          controller.signal,
-        )
-      }
-      if (controller.signal.aborted || preparingController.current !== controller) {
-        releaseTask(tools)
-        return
-      }
-      if (!grants.current.has(grantKey(tools))) {
-        pendingTask.current = tools
-        setPending({ tools, question })
-      } else void startRun(tools, question)
-    } catch (error) {
-      if (!controller.signal.aborted) notify(error)
-    } finally {
-      if (preparingController.current === controller) {
-        preparingController.current = null
-        setPreparing(false)
-      }
-    }
+    const source = loaded
+    const point = capture()
+    if (!point) return
+    await taskRuntime.prepare({
+      bookId: source.record.id,
+      bookVersion: source.record.version,
+      scope: preferences.scope,
+      question,
+      settings: model,
+      apiKey,
+      createTask: (signal) =>
+        readingService.create(source.record, source.paragraphs, point, preferences.scope, signal),
+      isApproved: (snapshot) => grants.current.has(grantKey(snapshot)),
+    })
   }
   const askAction = (action: ReadingAction) =>
     ask(
@@ -808,10 +647,8 @@ export default function App() {
       }
       await readingService.register(target.record, target.paragraphs)
       let locator =
-        activeTools.current?.snapshot.bookId === record.id &&
-        activeTools.current.snapshot.bookVersion === record.version
-          ? await activeTools.current.resolveAnchor(citation.fragment)
-          : await readingService.resolveAnchor(record.id, record.version, citation.fragment)
+        (await taskRuntime.resolveAnchor(record.id, record.version, citation.fragment)) ??
+        (await readingService.resolveAnchor(record.id, record.version, citation.fragment))
       if (!locator) {
         const matches = target.paragraphs.filter((p) => p.text.includes(citation.fragment.text))
         if (matches.length !== 1)
@@ -1384,6 +1221,7 @@ export default function App() {
             cancel()
             await storage.put('settings', 'model', checked)
             setModel(checked)
+            taskRuntime.setEnabled(checked.enabled)
             let nextHasApiKey = hasApiKey
             if (isTauri()) {
               if (credentialChange.kind === 'set') {
@@ -1489,7 +1327,7 @@ export default function App() {
             <div>
               <dt>资料范围</dt>
               <dd>
-                {scopeLabels[pending.tools.snapshot.scope]} · {pending.tools.snapshot.bookTitle}
+                {scopeLabels[pending.snapshot.scope]} · {pending.snapshot.bookTitle}
               </dd>
             </div>
             <div>
@@ -1498,14 +1336,14 @@ export default function App() {
             </div>
           </dl>
           <div className="send-preview">
-            {pending.tools.snapshot.initial.map((fragment) => (
+            {pending.snapshot.initial.map((fragment) => (
               <div key={fragment.citationId}>
                 <strong>{fragment.label}</strong>
                 <p>{fragment.text}</p>
               </div>
             ))}
           </div>
-          {conversation && conversation.snapshot.id === pending.tools.snapshot.id && (
+          {conversation && conversation.snapshot.id === pending.snapshot.id && (
             <details className="send-history">
               <summary>还会发送本话题最近的对话</summary>
               {conversation.messages
@@ -1529,8 +1367,8 @@ export default function App() {
             <button
               className="button primary"
               onClick={() => {
-                grants.current.add(grantKey(pending.tools))
-                void startRun(pending.tools, pending.question)
+                grants.current.add(grantKey(pending.snapshot))
+                taskRuntime.confirm()
               }}
             >
               允许此书会话发送
@@ -1623,6 +1461,7 @@ export default function App() {
               onClick={() => {
                 void (async () => {
                   cancel()
+                  await taskRuntime.flush()
                   download(
                     `ReadWeave-before-restore-${Date.now()}.json`,
                     JSON.stringify(await createBackup(false), null, 2),
@@ -1631,6 +1470,8 @@ export default function App() {
                   await restoreBackup(restorePreview)
                   setPreferences(restorePreview.preferences)
                   setModel(restorePreview.model)
+                  taskRuntime.reset()
+                  taskRuntime.setEnabled(restorePreview.model.enabled)
                   setConfigured(
                     hasApiKey || allowsKeylessModelEndpoint(restorePreview.model.endpoint),
                   )
@@ -1739,7 +1580,7 @@ export default function App() {
           <Brand />
           <p>在原文旁理解，顺畅继续阅读。</p>
           <p className="muted">
-            v0.1.0-alpha.8 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
+            v0.1.0-alpha.9 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
             foliate-js。正式目标为 Windows 11 与 Android 平板。
           </p>
           <div className="inline-notice">

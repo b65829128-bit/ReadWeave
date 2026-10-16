@@ -106,6 +106,7 @@ export function SettingsDialog({
       const availableKey = key.trim() || (hasApiKey && keyChange !== 'delete')
       const deletingKey = !key.trim() && keyChange === 'delete'
       if (
+        draft.enabled &&
         !availableKey &&
         !deletingKey &&
         !['localhost', '127.0.0.1', '[::1]'].includes(new URL(endpoint).hostname)
@@ -149,6 +150,14 @@ export function SettingsDialog({
           <p className="muted settings-intro">
             使用你自己的模型服务。只在你发送问题后，才会发送阅读资料。
           </p>
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={draft.enabled}
+              onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
+            />
+            启用阅读伙伴
+          </label>
           <label className="field">
             模型服务
             <select

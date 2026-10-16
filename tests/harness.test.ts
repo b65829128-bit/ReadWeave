@@ -8,6 +8,11 @@ import type { ProviderDelta, RunEvent } from '../src/harness/contracts'
 
 vi.mock('../src/harness/provider', () => ({ compatibleProvider: { complete: vi.fn() } }))
 const complete = vi.mocked(compatibleProvider.complete)
+const runContext = () => ({
+  provider: compatibleProvider,
+  runId: crypto.randomUUID(),
+  sessionRef: 'session_1',
+})
 function tools() {
   const locator = {
     cfi: 'epubcfi(/6/2!/4/2)',
@@ -64,6 +69,7 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
     const events: RunEvent[] = []
     await builtinHarness.submit(
       {
+        ...runContext(),
         tools: readingTools,
         question: '为什么？',
         history: [],
@@ -100,6 +106,7 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
     stream([{ reasoning_content: '继续解释。' }, { content: '追问的回答。' }])
     await builtinHarness.submit(
       {
+        ...runContext(),
         tools: readingTools,
         question: '再说说。',
         history,
@@ -121,6 +128,7 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
     stream([{ content: '直接回答。' }])
     await builtinHarness.submit(
       {
+        ...runContext(),
         tools: tools(),
         question: '问题',
         history: [],
@@ -145,6 +153,7 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
     const events: RunEvent[] = []
     const run = builtinHarness.submit(
       {
+        ...runContext(),
         tools: task,
         question: '问题',
         history: [],
@@ -190,6 +199,7 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
     const events: RunEvent[] = []
     await builtinHarness.submit(
       {
+        ...runContext(),
         tools: tools(),
         question: '问题',
         history: [],

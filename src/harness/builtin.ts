@@ -1,25 +1,28 @@
 import { ReadingToolError, readingToolDefinitions } from '../core/tools'
 import type { CompletionMessage, ToolCall, ToolExecution } from '../core/types'
-import { compatibleProvider } from './provider'
 import { taskContext, type HarnessAdapter, type RunEvent } from './contracts'
 
 type EventPayload = RunEvent extends infer E
   ? E extends RunEvent
-    ? Omit<E, 'runId' | 'eventId' | 'sequence'>
+    ? Omit<E, 'runId' | 'sessionRef' | 'eventId' | 'sequence'>
     : never
   : never
 
 export const builtinHarness: HarnessAdapter = {
   id: 'builtin',
   capabilities: { tools: true, cancel: true, external: false },
-  async submit({ tools, question, history, settings, apiKey, signal }, onEvent) {
+  async submit(
+    { tools, runId, sessionRef, provider, question, history, settings, apiKey, signal },
+    onEvent,
+  ) {
     let sequence = 0
     const emit = (event: EventPayload) => {
       if (!signal.aborted)
         onEvent({
           ...event,
-          runId: tools.runId,
-          eventId: `${tools.runId}_${++sequence}`,
+          runId,
+          sessionRef,
+          eventId: `${runId}_${++sequence}`,
           sequence,
         } as RunEvent)
     }
@@ -60,7 +63,7 @@ export const builtinHarness: HarnessAdapter = {
       let content = ''
       let reasoning = ''
       emit({ type: 'status', text: round ? '结合找到的原文，继续解释…' : '正在思考这段内容…' })
-      await compatibleProvider.complete(
+      await provider.complete(
         {
           model: settings.model,
           messages: structuredClone(messages),
@@ -118,7 +121,7 @@ export const builtinHarness: HarnessAdapter = {
             emit({
               type: 'tool',
               tool: {
-                id: `${tools.runId}_${round}_${chunk.index}`,
+                id: `${runId}_${round}_${chunk.index}`,
                 name: call.function.name,
                 arguments: call.function.arguments,
                 status: 'preparing',
@@ -150,7 +153,7 @@ export const builtinHarness: HarnessAdapter = {
         const call = calls[index]
         if (signal.aborted) throw new DOMException('已取消', 'AbortError')
         const trace: ToolExecution = {
-          id: `${tools.runId}_${round}_${[...pending.keys()][index]}`,
+          id: `${runId}_${round}_${[...pending.keys()][index]}`,
           name: call.function.name,
           arguments: call.function.arguments,
           status: 'running',

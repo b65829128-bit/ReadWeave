@@ -122,12 +122,17 @@ const conversation = z
             reasoning: z.string().max(256_000).optional(),
             tools: z.array(toolExecution).max(6).optional(),
             protocol: z.array(protocolMessage).max(13).optional(),
+            run: z
+              .object({ id, sequence: z.number().int().nonnegative(), eventId: id.optional() })
+              .strict()
+              .optional(),
           })
           .strict(),
       )
       .max(200),
     evidence: z.array(fragment).max(256),
     createdAt: z.string().datetime(),
+    backend: z.object({ harnessId: id, providerId: id, sessionRef: id }).strict().optional(),
   })
   .strict()
   .refine((c) => c.bookId === c.snapshot.bookId, '会话和快照不属于同一本书。')
@@ -154,6 +159,7 @@ export const preferencesSchema = z
   .strict()
 export const modelSettingsSchema = z
   .object({
+    enabled: z.boolean().default(true),
     provider: z.enum(['deepseek', 'compatible']).optional(),
     endpoint: z.string().max(2048),
     model: z.string().min(1).max(160),

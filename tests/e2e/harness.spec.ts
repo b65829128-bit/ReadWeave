@@ -62,7 +62,8 @@ const server = createServer(async (request, response) => {
     })
   } else {
     const context = JSON.parse(body.messages[1].content!.split('\n').slice(1).join('\n'))
-    const fragment = tool ? JSON.parse(tool.content!).fragments[0] : context.sources.at(-1)
+    const fragment =
+      (tool ? JSON.parse(tool.content!).fragments[0] : null) ?? context.sources.at(-1)
     write({
       content: `这是把疑问贴近原文的练习。 [[${fragment.citationId}]]\n\n$$f(x)=x^2$$\n\n![不自动加载的图片](https://evil.example/ai.png)\n\n<script>window.__aiExecuted=true</script>`,
     })
@@ -219,6 +220,12 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
       .some((message) => message.reasoning?.includes('先核对当前阅读范围')),
   ).toBe(true)
   expect(JSON.stringify(backup)).not.toContain('ephemeral-test-secret')
+  expect(backup.conversations.every((item) => item.backend?.harnessId === 'builtin')).toBe(true)
+  const runIds = backup.conversations.flatMap((item) =>
+    item.messages.flatMap((message) => (message.run ? [message.run.id] : [])),
+  )
+  expect(runIds.length).toBe(3)
+  expect(new Set(runIds).size).toBe(runIds.length)
   expect(await settingsStorage(page)).not.toContain('ephemeral-test-secret')
   await page.reload()
   await page.getByRole('button', { name: '打开设置' }).click()
@@ -245,4 +252,84 @@ test('deleting a saved key allows a remote model configuration to be saved', asy
     'placeholder',
     '输入服务密钥',
   )
+})
+
+async function configureFixture(page: Page) {
+  await page
+    .context()
+    .grantPermissions(['local-network-access'], { origin: 'http://127.0.0.1:1430' })
+  await page.getByRole('button', { name: '模型设置' }).click()
+  await page.getByRole('textbox', { name: '服务地址' }).fill(endpoint)
+  await page.getByLabel('模型名称', { exact: true }).fill('fixture-model')
+  await page.getByRole('button', { name: '保存设置' }).click()
+}
+
+test('switching books during a stream archives the cancelled run and starts a separate session', async ({
+  page,
+}) => {
+  const before = requests.length
+  await page.goto('/')
+  await page.getByRole('button', { name: '开始阅读' }).click()
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  await configureFixture(page)
+  await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('取消测试：稍后换书')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await page.getByRole('button', { name: '允许此书会话发送' }).click()
+  await expect(page.locator('.answer-markdown')).toContainText('第一段尚未结束。')
+  await page.getByRole('button', { name: '返回书架' }).click()
+  await page.locator('.book-card').filter({ hasText: '梯度下降的第一步' }).click()
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('追问：这本书的开头讲了什么？')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await expect(page.getByRole('dialog')).toContainText('梯度下降的第一步')
+  await page.getByRole('button', { name: '允许此书会话发送' }).click()
+  await expect(page.locator('.answer-markdown')).toContainText('这是把疑问贴近原文的练习。')
+  await expect(page.getByRole('button', { name: '停止回答' })).toHaveCount(0)
+  await expect(page.locator('.message-assistant')).toHaveCount(1)
+  await expect(page.locator('.message-assistant')).not.toContainText('第一段尚未结束。')
+  const runs = requests.slice(before)
+  expect(runs).toHaveLength(2)
+  const context = (body: ApiBody) =>
+    JSON.parse(body.messages[1].content!.split('\n').slice(1).join('\n'))
+  expect(context(runs[1]).book).toBe('梯度下降的第一步')
+  expect(context(runs[1]).snapshotId).not.toBe(context(runs[0]).snapshotId)
+  await page.getByRole('button', { name: '返回书架' }).click()
+  await page.getByRole('button', { name: '阅读笔记', exact: true }).click()
+  await page.getByRole('button', { name: /阅读问答/ }).click()
+  await expect(page.locator('.conversation-card')).toHaveCount(2)
+})
+
+test('disabling the assistant stops its stream, survives reload, and requires new consent after re-enabling', async ({
+  page,
+}) => {
+  const before = requests.length
+  await page.goto('/')
+  await page.getByRole('button', { name: '开始阅读' }).click()
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  await configureFixture(page)
+  await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('取消测试：停用阅读伙伴')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await page.getByRole('button', { name: '允许此书会话发送' }).click()
+  await expect(page.locator('.answer-markdown')).toContainText('第一段尚未结束。')
+  await page.getByRole('button', { name: '模型设置' }).click()
+  await page.getByRole('checkbox', { name: '启用阅读伙伴' }).uncheck()
+  await page.getByRole('button', { name: '保存设置' }).click()
+  await expect(page.getByText('已停止，以上内容可能不完整。')).toBeVisible()
+  await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('停用时不应发送')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await expect(page.getByRole('checkbox', { name: '启用阅读伙伴' })).not.toBeChecked()
+  expect(requests.slice(before)).toHaveLength(1)
+  await page.reload()
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await expect(page.getByRole('checkbox', { name: '启用阅读伙伴' })).not.toBeChecked()
+  await page.getByRole('checkbox', { name: '启用阅读伙伴' }).check()
+  await page.getByRole('button', { name: '保存设置' }).click()
+  await page.getByRole('button', { name: '继续阅读', exact: true }).click()
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('追问：重新启用后的问题')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await page.getByRole('button', { name: '允许此书会话发送' }).click()
+  await expect(page.locator('.answer-markdown')).toContainText('这是把疑问贴近原文的练习。')
+  await expect(page.getByRole('button', { name: '停止回答' })).toHaveCount(0)
+  expect(requests.slice(before)).toHaveLength(2)
 })

@@ -67,6 +67,7 @@ export class SseDecoder {
 
 export const compatibleProvider: ProviderAdapter = {
   id: 'chat-completions-compatible',
+  capabilities: { streaming: true, tools: true, cancel: true },
   async complete(body, config: ModelSettings & { apiKey: string }, signal, onDelta) {
     const endpoint = completionEndpoint(config.endpoint)
     const serialized = JSON.stringify(body)

@@ -80,6 +80,7 @@ export interface Message {
   reasoning?: string
   tools?: ToolExecution[]
   protocol?: CompletionMessage[]
+  run?: { id: string; sequence: number; eventId?: string }
 }
 export interface ToolCall {
   id: string
@@ -109,8 +110,10 @@ export interface Conversation {
   messages: Message[]
   evidence: Fragment[]
   createdAt: string
+  backend?: { harnessId: string; providerId: string; sessionRef: string }
 }
 export interface ModelSettings {
+  enabled: boolean
   provider: 'deepseek' | 'compatible'
   endpoint: string
   model: string
@@ -132,6 +135,7 @@ export const defaultPreferences: Preferences = {
   scope: 'to-position',
 }
 export const defaultModel: ModelSettings = {
+  enabled: true,
   provider: 'deepseek',
   endpoint: 'https://api.deepseek.com/v1',
   model: 'deepseek-flash',

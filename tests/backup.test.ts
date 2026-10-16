@@ -47,6 +47,7 @@ describe('versioned backups', () => {
       systemPrompt: '阅读伙伴',
     }
     expect(modelSettingsSchema.parse(legacy)).toMatchObject({
+      enabled: true,
       provider: 'deepseek',
       thinking: 'enabled',
       reasoningEffort: 'high',
@@ -117,6 +118,72 @@ describe('versioned backups', () => {
     const invalid = { ...valid(), packs: [{ ...valid().packs[0], id: 'another.pack' }] }
     expect(backupSchema.safeParse(invalid).success).toBe(false)
     expect(storage.merge).not.toHaveBeenCalled()
+  })
+  it('round-trips host session metadata and disabled state, rejecting credentials or native grants inside them', () => {
+    const conversation = {
+      id: 'conversation_1',
+      bookId: book.id,
+      snapshot: {
+        id: 'snap_1',
+        bookId: book.id,
+        bookVersion: book.version,
+        bookTitle: book.title,
+        chapter: '一',
+        createdAt: book.addedAt,
+        scope: 'to-position',
+        selection: '',
+        initial: [],
+        locator: { cfi: '', sectionIndex: 0, paragraphId: 'p_0_0', endOffset: 0, progress: 0 },
+      },
+      messages: [
+        {
+          id: 'message_1',
+          role: 'assistant',
+          content: '回答',
+          status: 'done',
+          run: { id: 'execution_1', sequence: 2, eventId: 'event_2' },
+        },
+      ],
+      evidence: [],
+      createdAt: book.addedAt,
+      backend: {
+        harnessId: 'builtin',
+        providerId: 'chat-completions-compatible',
+        sessionRef: 'session_1',
+      },
+    }
+    const backup = {
+      ...valid(),
+      conversations: [conversation],
+      model: { ...defaultModel, enabled: false },
+    }
+    const parsed = parseBackup(JSON.stringify(backup))
+    expect(parsed.model.enabled).toBe(false)
+    expect(parsed.conversations[0]).toEqual(conversation)
+    expect(
+      backupSchema.safeParse({
+        ...backup,
+        conversations: [
+          { ...conversation, backend: { ...conversation.backend, apiKey: 'must-not-restore' } },
+        ],
+      }).success,
+    ).toBe(false)
+    expect(
+      backupSchema.safeParse({
+        ...backup,
+        conversations: [
+          {
+            ...conversation,
+            messages: [
+              {
+                ...conversation.messages[0],
+                run: { ...conversation.messages[0].run, nativeRunId: 'must-not-authorize' },
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false)
   })
   it('checks every original book hash before modifying existing records', async () => {
     vi.mocked(sha256).mockResolvedValueOnce('b'.repeat(64))
