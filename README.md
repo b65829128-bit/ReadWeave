@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.9`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，原生阅读核心和内置问答的统一任务入口已经接入。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.10`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，原生阅读核心和内置问答的统一任务入口已经接入。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -13,6 +13,7 @@ ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Wind
 - 大书导入只解析一次，同次运行中重开当前书复用已校验内容并保留最新位置。《资治通鉴》的实测与验证范围见 [大书性能记录](docs/epub-performance.md)。
 - 划线后提问、高亮和笔记；重选已有高亮可取消，不叠加重复高亮；点击书内标注查看、编辑或删除笔记。
 - 可独立收起目录和阅读伙伴；全屏沉浸阅读，点击中间唤醒控件、两侧翻页；选文时保留标注操作。
+- 触摸选区拖动时拦截翻页；手机和触摸平板竖屏使用覆盖式回答面板，打开面板不压缩正文，排版或可用高度变化后仍保留所选原文。
 - 连接自己的 Chat Completions 兼容模型服务，流式回答、追问、取消、数学排版和返回提问位置。
 - 统一管理问答准备、发送确认、取消和有序保存；换书或停用后端后，旧轮次不会继续改写当前回答。设置中可停用阅读伙伴，重启后保持。
 - DeepSeek 思考模式与低 / 高 / 最高强度、输出预算、流式思考过程；可展开的工具名称、参数、状态和结果。
@@ -46,10 +47,10 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.9_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.10_x64-setup.exe
 ```
 
-Android arm64 alpha.9 测试 APK 位于 `.local/ReadWeave-alpha.9.apk`。本轮已在 Android 16 真机验证启动、停用后重启保留，以及重新启用后再次重启保留；alpha.8 的系统密钥保存 / 重启 / 删除证据另记。APK 使用 Android Debug 开发证书。文件校验值和实际范围见 [验证记录](docs/validation.md)。
+Android arm64 alpha.10 测试 APK 位于 `.local/ReadWeave-alpha.10.apk`，Windows 直接运行包位于 `.local/ReadWeave-alpha.10.exe`。本轮移动端回归使用浏览器触摸模拟，安卓系统选区手柄、软键盘和真实模型引用仍需真机复测。alpha.9 的 Android 16 启停保存证据和 alpha.8 的系统密钥生命周期证据另记。APK 使用 Android Debug 开发证书。文件校验值和实际范围见 [验证记录](docs/validation.md)。
 
 Windows 包是未签名的开发预览包。实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
 
