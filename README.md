@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.7`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.8`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -45,8 +45,10 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.7_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.8_x64-setup.exe
 ```
+
+Android arm64 alpha.8 测试 APK 位于 `.local/ReadWeave-alpha.8.apk`。它已安装到 Android 16 真机并完成启动与本机密钥保存 / 重启 / 删除验收；签名为 Android Debug 开发证书。文件校验值和完整范围见 [验证记录](docs/validation.md)。
 
 这是未签名的开发预览包。Windows 11 是产品目标，实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
 
@@ -68,9 +70,9 @@ DeepSeek 默认建议模型为 `deepseek-flash`，也可选 `deepseek-v4-pro` �
 
 远程服务只接受 HTTPS。无需密钥的本机开发服务可以使用 `http://127.0.0.1:端口/v1`。浏览器预览需要服务允许跨域，本机服务还可能需要浏览器的本地网络许可；原生客户端通过 Rust 请求，不依赖浏览器 CORS。
 
-**密钥当前只在进程内存中使用，关闭后清除。** 不写入 localStorage、IndexedDB、SQLite、日志或默认备份。原方案要求的跨平台安全凭据持久化尚未验证，因此暂不提供“记住密钥”。内置后端已实现真实请求路径，但双服务商业模型验收尚未执行；自动化测试使用本机协议测试服务。
+Windows 原生客户端使用 Windows 凭据管理器，Android 使用由 Android Keystore 保护的应用凭据存储。启动时仅查询密钥是否存在；密钥不回传到界面、不写入书籍数据库、日志或默认备份，原生模型请求直接从系统安全存储读取。设置中留空会保留已保存密钥，也可以明确删除。浏览器预览仍只在本次运行内存中保留密钥。真实模型服务验收尚未执行；自动化测试使用本机协议测试服务。
 
-每次启动重新填写是当前预览版的功能缺口，长期需要系统保护的“记住密钥”与清除入口。用户反馈后已将安全凭据保存列为优先的日常使用工作；平台实现及验收建议见 [兼容性与日常使用](docs/epub-compatibility.md)。
+首次在一台设备保存密钥后，后续启动不需要重新填写。安全凭据按设备保存，不随备份恢复，也不会同步到其他设备；请在每台设备分别配置。
 
 未连接模型时不会生成解释，不会将示例文字伪装成 AI 回答。划线本身不会发送资料。联网搜索和外部 Harness 目前没有启用。
 
@@ -114,16 +116,16 @@ docs/                 原方案、工程决策、验证记录和开发计划
 
 ## 尚未完成
 
-- Android SDK / NDK 构建和 Android 真机的连续选区、旋转、键盘、面板与安装验收。配置暂以 Android 12 / API 31 为起点；WebView 最低版本仍需实测确定。
+- Android 连续选区、旋转、键盘、面板与长时间阅读仍待验收。alpha.8 arm64 APK 已在 Android 16 / API 36 真机启动，并完成系统密钥保存、重启保留和删除验证；配置为 minSdk 31 / targetSdk 37，WebView 最低版本仍需实测确定。详见 [验证记录](docs/validation.md)。
 - 两个真实模型服务验收，以及真实 Hermes ACP、Connector、MCP / rmcp 的双向接入。
 - 统一任务生命周期和适配器注册入口。原生权限与取证已接入当前内置问答；外部调用身份、MCP 配对与授权仍待验证。
 - SQLite FTS5、中文预分词、分段索引状态。当前受限文本扫描明确返回 `indexStatus: scan`，不伪装成已完成的全文索引。
-- 凭据安全持久化、数据库迁移 / 故障恢复长期验收、复杂 EPUB 样本与完整定位回退。
+- 数据库迁移 / 故障恢复长期验收、复杂 EPUB 样本与完整定位回退。
 - PDF / OCR、图片公式识别、联网搜索、可执行插件和云同步。
 
 EPUB 当前移除出版物 CSS、SVG 和主动内容，采用统一排版。复杂版式可能损失表现；标准文本与基础 MathML 路径仍需更多真实书籍样本验证。定位主要依赖清理后的 CFI，歧义文本不会自动跳转。参见 [开发计划](docs/roadmap.md)。
 
-本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。Android 真机工作按用户要求暂缓；下一阶段先抽出统一任务与适配器入口，再接一个真实外部 Harness。
+本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。Android 真机已恢复验收；下一阶段先抽出统一任务与适配器入口，再接一个真实外部 Harness。
 
 ## 许可
 

@@ -1,6 +1,6 @@
 # 原生阅读核心
 
-日期：2026-10-14。实现范围：alpha.3，当前主窗口的内置问答。外部 MCP / Connector 尚未开放，Android 真机工作暂缓。
+首阶段日期：2026-10-14。实现范围：alpha.3 起接入当前主窗口的内置问答。外部 MCP / Connector 尚未开放；alpha.8 已恢复 Android 真机验收并验证平台安全凭据。
 
 ## 运行路径
 
@@ -47,4 +47,4 @@ JSON 备份仍是 schemaVersion 1，快照新增可选 transformVersion / conten
 
 正文提取仍来自可信宿主。登记校验和指纹证明保存内容的一致性，不能独立证明提取结果与 EPUB 字节的语义对应；没有宣称原生 EPUB 解析器、第三方脚本隔离或外部 MCP 调用身份已经完成。
 
-下一阶段抽出任务生命周期和适配器注册入口，再验证一个真实外部 Harness 的双向书内取证、追问和取消。密钥继续只在内存；真实商业模型、完整 Windows 安装 / 故障恢复、Android 与复杂书籍仍分别验收。执行证据见 [validation](validation.md)，实施清单见 [计划](native-core-plan.md)。
+下一阶段抽出任务生命周期和适配器注册入口，再验证一个真实外部 Harness 的双向书内取证、追问和取消。alpha.8 已验证 Windows / Android 的系统安全凭据与 Android APK 启动；真实商业模型、完整 Windows 安装 / 故障恢复、Android 连续阅读交互与复杂书籍仍分别验收。执行证据见 [validation](validation.md)，实施清单见 [计划](native-core-plan.md)。
