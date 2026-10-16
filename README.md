@@ -49,7 +49,7 @@ src-tauri/target/release/readweave.exe
 src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.9_x64-setup.exe
 ```
 
-Android arm64 alpha.9 测试 APK 位于 `.local/ReadWeave-alpha.9.apk`。alpha.8 的系统密钥保存 / 重启 / 删除和本轮原生运行范围分别记录；APK 使用 Android Debug 开发证书。文件校验值和实际范围见 [验证记录](docs/validation.md)。
+Android arm64 alpha.9 测试 APK 位于 `.local/ReadWeave-alpha.9.apk`。本轮已在 Android 16 真机验证启动、停用后重启保留，以及重新启用后再次重启保留；alpha.8 的系统密钥保存 / 重启 / 删除证据另记。APK 使用 Android Debug 开发证书。文件校验值和实际范围见 [验证记录](docs/validation.md)。
 
 Windows 包是未签名的开发预览包。实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
 
