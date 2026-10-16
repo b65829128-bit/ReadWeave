@@ -11,6 +11,7 @@ ReaderAdapter 继续负责安全 EPUB 变换、正文提取、阅读位置与界
 | 层                           | 负责内容                                                                     |
 | ---------------------------- | ---------------------------------------------------------------------------- |
 | ReaderAdapter / 宿主         | EPUB 清理与段落提取、用户选择范围、发送预览、引用跳转                        |
+| TaskRuntime / 注册表         | 准备与执行生命周期、适配器路由 / 停用、执行事件隔离、会话与证据有序保存      |
 | readingService / ReadingTask | 原生命令桥接、提问准备取消、迟到结果丢弃、当前任务证据缓存                   |
 | Rust ReadingCore             | 原书哈希与正文登记校验、冻结快照、身份 / 版本 / 范围检查、读取预算、引用签发 |
 | SQLite                       | 既有 records、正文块与指纹、快照、真实引用与定位记录、本地数据库设备标识     |
@@ -47,4 +48,4 @@ JSON 备份仍是 schemaVersion 1，快照新增可选 transformVersion / conten
 
 正文提取仍来自可信宿主。登记校验和指纹证明保存内容的一致性，不能独立证明提取结果与 EPUB 字节的语义对应；没有宣称原生 EPUB 解析器、第三方脚本隔离或外部 MCP 调用身份已经完成。
 
-下一阶段抽出任务生命周期和适配器注册入口，再验证一个真实外部 Harness 的双向书内取证、追问和取消。alpha.8 已验证 Windows / Android 的系统安全凭据与 Android APK 启动；真实商业模型、完整 Windows 安装 / 故障恢复、Android 连续阅读交互与复杂书籍仍分别验收。执行证据见 [validation](validation.md)，实施清单见 [计划](native-core-plan.md)。
+alpha.9 已接入 [统一任务与适配器入口](task-runtime.md)。宿主执行 runId 逐轮创建，和 ReadingTask 的原生授权 runId 独立；会话归档只保存宿主映射，不从备份恢复授权。下一阶段验证一个真实外部 Harness 的原生调用身份、双向书内取证、追问和取消。alpha.8 的系统安全凭据与 Android APK 启动证据继续保留；真实商业模型、完整 Windows 安装 / 故障恢复、Android 连续阅读交互与复杂书籍仍分别验收。执行证据见 [validation](validation.md)，实施清单见 [计划](native-core-plan.md)。

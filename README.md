@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.8`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，并完成首阶段原生阅读核心迁移。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.9`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，原生阅读核心和内置问答的统一任务入口已经接入。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -14,6 +14,7 @@ ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Wind
 - 划线后提问、高亮和笔记；重选已有高亮可取消，不叠加重复高亮；点击书内标注查看、编辑或删除笔记。
 - 可独立收起目录和阅读伙伴；全屏沉浸阅读，点击中间唤醒控件、两侧翻页；选文时保留标注操作。
 - 连接自己的 Chat Completions 兼容模型服务，流式回答、追问、取消、数学排版和返回提问位置。
+- 统一管理问答准备、发送确认、取消和有序保存；换书或停用后端后，旧轮次不会继续改写当前回答。设置中可停用阅读伙伴，重启后保持。
 - DeepSeek 思考模式与低 / 高 / 最高强度、输出预算、流式思考过程；可展开的工具名称、参数、状态和结果。
 - 冻结问题上下文；默认只提供截至提问位置的资料；首次发送前预览；两个受限书内工具与真实原文引用。
 - 原生端由 Rust / SQLite 保存正文、冻结快照、检查身份 / 范围 / 预算并签发引用；重启后保留引用定位，读取授权重新创建。
@@ -45,12 +46,12 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.8_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.9_x64-setup.exe
 ```
 
-Android arm64 alpha.8 测试 APK 位于 `.local/ReadWeave-alpha.8.apk`。它已安装到 Android 16 真机并完成启动与本机密钥保存 / 重启 / 删除验收；签名为 Android Debug 开发证书。文件校验值和完整范围见 [验证记录](docs/validation.md)。
+Android arm64 alpha.9 测试 APK 位于 `.local/ReadWeave-alpha.9.apk`。alpha.8 的系统密钥保存 / 重启 / 删除和本轮原生运行范围分别记录；APK 使用 Android Debug 开发证书。文件校验值和实际范围见 [验证记录](docs/validation.md)。
 
-这是未签名的开发预览包。Windows 11 是产品目标，实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
+Windows 包是未签名的开发预览包。实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
 
 Windows 启动失败会显示“ReadWeave 启动诊断”，列出具体步骤和错误代码；安装目录可写时，还会在 EXE 旁留下 `ReadWeave-startup-error.log`。报告仅包含应用版本、固定步骤、错误代码和静态说明，不包含书籍、模型设置或密钥。界面缓存使用独立的 `webview-v1` 目录，书籍与记录继续使用原来的本地存储。
 
@@ -63,6 +64,8 @@ alpha.6 已处理该书导入和打开时的主要耗时；随后用户日常双
 ## 配置阅读伙伴
 
 在“设置 → 模型连接”输入服务地址、模型名称和自己的密钥。服务地址可填 `https://你的服务/v1`；程序补全 `/chat/completions`。服务需要支持 SSE 流式响应和 function tools。
+
+取消勾选“启用阅读伙伴”会停止当前回答并撤销该话题的读取授权，保留模型设置和系统密钥。重新启用后，新话题再次预览要发送的资料。
 
 DeepSeek 默认建议模型为 `deepseek-flash`，也可选 `deepseek-v4-pro` 或填写自己的模型名称。选择“DeepSeek”服务类型后，可以开关思考模式、设置 `low / high / max` 强度和单次输出预算。思考过程与最终回答分别显示；工具调用可展开查看详情，保存的问答和 JSON 备份保留这些记录。旧配置的模型名称会保留，旧备份仍可读取。
 
@@ -118,14 +121,14 @@ docs/                 原方案、工程决策、验证记录和开发计划
 
 - Android 连续选区、旋转、键盘、面板与长时间阅读仍待验收。alpha.8 arm64 APK 已在 Android 16 / API 36 真机启动，并完成系统密钥保存、重启保留和删除验证；配置为 minSdk 31 / targetSdk 37，WebView 最低版本仍需实测确定。详见 [验证记录](docs/validation.md)。
 - 两个真实模型服务验收，以及真实 Hermes ACP、Connector、MCP / rmcp 的双向接入。
-- 统一任务生命周期和适配器注册入口。原生权限与取证已接入当前内置问答；外部调用身份、MCP 配对与授权仍待验证。
+- 外部调用身份、MCP 配对与授权，以及外部会话打开 / 重连。内置问答已经通过 [统一任务与适配器入口](docs/task-runtime.md) 运行。
 - SQLite FTS5、中文预分词、分段索引状态。当前受限文本扫描明确返回 `indexStatus: scan`，不伪装成已完成的全文索引。
 - 数据库迁移 / 故障恢复长期验收、复杂 EPUB 样本与完整定位回退。
 - PDF / OCR、图片公式识别、联网搜索、可执行插件和云同步。
 
 EPUB 当前移除出版物 CSS、SVG 和主动内容，采用统一排版。复杂版式可能损失表现；标准文本与基础 MathML 路径仍需更多真实书籍样本验证。定位主要依赖清理后的 CFI，歧义文本不会自动跳转。参见 [开发计划](docs/roadmap.md)。
 
-本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。Android 真机已恢复验收；下一阶段先抽出统一任务与适配器入口，再接一个真实外部 Harness。
+本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。下一阶段先固定一个实际外部后端与版本，完成原生调用身份和最小授权通道，再验证真实外部 Harness 的工具回调、追问与取消。
 
 ## 许可
 
