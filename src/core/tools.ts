@@ -292,8 +292,14 @@ export function verifiedCitations(markdown: string, evidence: readonly Fragment[
       (fragment) =>
         fragment.citationId === id && normalize(fragment.text).includes(normalize(quote)),
     )
+  // Normalize presentation only. Never guess an issued ID from a prefix, suffix or order.
   let checked = markdown.replace(
-    /([“"])([^”"\n]{4,})[”"]\s*\[\[(cite_[a-zA-Z0-9]+)\]\]/g,
+    /\\?\[\\?\[\s*((?:cite|citation)_[^\]\n]{1,200}?)\s*\\?\]\\?\]/g,
+    (_match, id: string) => `[[${id.trim()}]]`,
+  )
+  checked = checked.replace(/`(\[\[(?:cite|citation)_[^\]\n]{1,200}\]\])`/g, '$1')
+  checked = checked.replace(
+    /([“"])([^”"\n]{4,})[”"]\s*\[\[((?:cite|citation)_[^\]\n]{1,200})\]\]/g,
     (match, _opening: string, quote: string, id: string) =>
       ids.has(id) && !matchesQuote(id, quote)
         ? match.replace(`[[${id}]]`, '（引文与原文不匹配）')
@@ -304,14 +310,16 @@ export function verifiedCitations(markdown: string, evidence: readonly Fragment[
     (match, _prefix: string, block: string) => {
       const quote = block
         .replace(/^>\s?/gm, '')
-        .replace(/\[\[cite_[a-zA-Z0-9]+\]\]/g, '')
+        .replace(/\[\[(?:cite|citation)_[^\]\n]{1,200}\]\]/g, '')
         .trim()
-      return match.replace(/\[\[(cite_[a-zA-Z0-9]+)\]\]/g, (marker: string, id: string) =>
-        ids.has(id) && quote && !matchesQuote(id, quote) ? '（引文与原文不匹配）' : marker,
+      return match.replace(
+        /\[\[((?:cite|citation)_[^\]\n]{1,200})\]\]/g,
+        (marker: string, id: string) =>
+          ids.has(id) && quote && !matchesQuote(id, quote) ? '（引文与原文不匹配）' : marker,
       )
     },
   )
-  return checked.replace(/\[\[(cite_[a-zA-Z0-9]+)\]\]/g, (_match, id: string) =>
+  return checked.replace(/\[\[((?:cite|citation)_[^\]\n]{1,200})\]\]/g, (_match, id: string) =>
     ids.has(id) ? `[原文](readweave:${id})` : '（引用未核验）',
   )
 }

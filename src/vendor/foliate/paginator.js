@@ -593,6 +593,7 @@ export class Paginator extends HTMLElement {
             }
         })
         const checkPointerSelection = debounce((range, sel) => {
+            if (this.hasAttribute('host-controls-input')) return
             if (!sel.rangeCount) return
             const selRange = sel.getRangeAt(0)
             const backward = selectionIsBackward(sel)
@@ -830,6 +831,7 @@ export class Paginator extends HTMLElement {
         })
     }
     #onTouchStart(e) {
+        if (this.hasAttribute('host-controls-input')) return
         const touch = e.changedTouches[0]
         this.#touchState = {
             x: touch?.screenX, y: touch?.screenY,
@@ -838,6 +840,7 @@ export class Paginator extends HTMLElement {
         }
     }
     #onTouchMove(e) {
+        if (this.hasAttribute('host-controls-input')) return
         const state = this.#touchState
         if (state.pinched) return
         state.pinched = globalThis.visualViewport.scale > 1
@@ -860,6 +863,7 @@ export class Paginator extends HTMLElement {
         this.scrollBy(dx, dy)
     }
     #onTouchEnd() {
+        if (this.hasAttribute('host-controls-input')) return
         this.#touchScrolled = false
         if (this.scrolled) return
 

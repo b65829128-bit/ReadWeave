@@ -174,4 +174,26 @@ describe('frozen, scoped reading grants', () => {
       `[原文](readweave:${cite})`,
     )
   })
+  it('handles whitespace, escaped brackets and inline-code markers while requiring an exact issued ID', () => {
+    const tools = new ReadingTools(book, paragraphs, point, 'book')
+    const evidence = tools.allEvidence()
+    const cite = evidence[0].citationId
+    for (const marker of [`[[ ${cite} ]]`, `\\[\\[${cite}\\]\\]`, `\`[[${cite}]]\``])
+      expect(verifiedCitations(marker, evidence)).toBe(`[原文](readweave:${cite})`)
+    const extended = { ...evidence[0], citationId: 'cite_archive_1-2' }
+    expect(verifiedCitations(`[[${extended.citationId}]]`, [extended])).toBe(
+      `[原文](readweave:${extended.citationId})`,
+    )
+    for (const marker of [
+      '[[citation_...]]',
+      '[[citation_1]]',
+      '[[cite_missing_1-2]]',
+      `[[citation_${cite.slice(5)}]]`,
+      `[[${cite.slice(0, -1)}]]`,
+    ])
+      expect(verifiedCitations(marker, evidence)).toBe('（引用未核验）')
+    expect(verifiedCitations(`“这是编造的引文” [[ ${cite} ]]`, evidence)).toContain(
+      '引文与原文不匹配',
+    )
+  })
 })

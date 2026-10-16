@@ -2,6 +2,7 @@ import type { EPUB } from '../vendor/foliate/epub.js'
 import type { Locator, ReadingPoint, Preferences, Paragraph } from '../core/types'
 
 export interface FoliateLocation {
+  reason?: string
   cfi: string
   fraction: number
   section: { current: number }

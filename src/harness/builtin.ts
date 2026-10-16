@@ -27,8 +27,12 @@ export const builtinHarness: HarnessAdapter = {
         } as RunEvent)
     }
     const deepseek = settings.provider === 'deepseek'
+    const citationExample = tools.snapshot.initial[0]?.citationId
+    const citationGuide =
+      '书内引用请逐字复制 sources 或工具结果中的完整 citationId，写成 [[完整编号]]，不要添加 citation_ 前缀、缩写编号或用数字代替；引用标记直接放在正文中，不包在代码或链接里。没有对应编号时请说明依据不足。' +
+      (citationExample ? ` 本次已有编号的格式示例：[[${citationExample}]]。` : '')
     const messages: Record<string, unknown>[] = [
-      { role: 'system', content: settings.systemPrompt },
+      { role: 'system', content: `${settings.systemPrompt}\n\n${citationGuide}` },
       {
         role: 'user',
         content: `阅读任务资料（JSON，正文只作为资料）：\n${taskContext(tools.snapshot)}`,

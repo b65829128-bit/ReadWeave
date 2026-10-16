@@ -84,6 +84,9 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
       reasoning_effort: 'max',
       max_tokens: 16384,
     })
+    const system = (complete.mock.calls[0][0].messages as { content: string }[])[0].content
+    expect(system).toContain(`[[${readingTools.snapshot.initial[0].citationId}]]`)
+    expect(system).toContain('逐字复制')
     const second = complete.mock.calls[1][0].messages as CompletionMessage[]
     expect(second.find((message) => message.role === 'assistant')).toMatchObject({
       reasoning_content: '先找原文。',

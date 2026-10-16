@@ -65,7 +65,7 @@ const server = createServer(async (request, response) => {
     const fragment =
       (tool ? JSON.parse(tool.content!).fragments[0] : null) ?? context.sources.at(-1)
     write({
-      content: `这是把疑问贴近原文的练习。 [[${fragment.citationId}]]\n\n$$f(x)=x^2$$\n\n![不自动加载的图片](https://evil.example/ai.png)\n\n<script>window.__aiExecuted=true</script>`,
+      content: `这是把疑问贴近原文的练习。 [[ ${fragment.citationId} ]]\n\n未提供的引用：[[citation_missing_1-2]]。\n\n$$f(x)=x^2$$\n\n![不自动加载的图片](https://evil.example/ai.png)\n\n<script>window.__aiExecuted=true</script>`,
     })
   }
   response.write('data: [DONE]\n\n')
@@ -147,6 +147,8 @@ test('streamed tool loop, frozen context, verified citation, follow-up, cancella
   await page.getByRole('button', { name: '允许此书会话发送' }).click()
   await page.getByRole('button', { name: '下一页' }).click()
   await expect(page.locator('.answer-markdown')).toContainText('这是把疑问贴近原文的练习。')
+  await expect(page.locator('.answer-markdown')).toContainText('引用未核验')
+  await expect(page.locator('.answer-markdown')).not.toContainText('[[citation_')
   await expect(page.locator('.katex')).toBeVisible()
   await expect(page.getByRole('button', { name: '停止回答' })).toHaveCount(0)
   const context = JSON.parse(requests[0].messages[1].content!.split('\n').slice(1).join('\n'))

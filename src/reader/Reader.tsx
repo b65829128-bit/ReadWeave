@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react'
 import { View } from '../vendor/foliate/view.js'
 import { Overlayer } from '../vendor/foliate/overlayer.js'
 import type { Annotation, Locator, Preferences, ReadingPoint } from '../core/types'
@@ -6,6 +6,7 @@ import type { FoliateLocation, FoliateView, ReaderAdapter } from './interfaces'
 import type { LoadedBook } from './epub'
 import { normalizeText } from './sanitize'
 import { textRange } from './range'
+import { ReaderGestures } from './gestures'
 
 interface Props {
   loaded: LoadedBook
@@ -27,7 +28,7 @@ function readerStyles(preferences: Preferences): string {
       : preferences.theme === 'sepia'
         ? ['#f0e7d2', '#413b30']
         : ['#fcfbf7', '#333c35']
-  return `html { color-scheme: ${preferences.theme === 'night' ? 'dark' : 'light'}; background: ${colors[0]} !important; }
+  return `html { touch-action: pan-y pinch-zoom; color-scheme: ${preferences.theme === 'night' ? 'dark' : 'light'}; background: ${colors[0]} !important; }
     body { font-family: "Noto Serif SC", "Source Han Serif SC", "Microsoft YaHei", serif !important; font-size: ${preferences.fontSize}px !important; line-height: ${preferences.lineHeight} !important; color: ${colors[1]} !important; background: ${colors[0]} !important; padding: 12px 4px !important; }
     p { margin: 0 0 1.1em; text-align: justify; } h1 { font-size: 1.65em; font-weight: 600; line-height: 1.5; margin: .8em 0 1em; } h2 { font-size: 1.25em; margin: 1.4em 0 .8em; } h3 { font-size: 1.1em; } img { max-width: 100%; max-height: 75vh; object-fit: contain; } a { color: #518270; } blockquote { margin: 1.5em 0; padding: .2em 1em; border-left: 2px solid #9aaf91; opacity: .85; } pre { white-space: pre-wrap; font-size: .85em; } ::selection { background: #c9d8bc; color: #23382b; }`
 }
@@ -89,6 +90,7 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
   const host = useRef<HTMLDivElement>(null)
   const viewRef = useRef<FoliateView | null>(null)
   const selected = useRef<ReadingPoint | null>(null)
+  const gestures = useRef(new ReaderGestures())
   const callbacks = useRef(props)
   const preferences = useRef(props.preferences)
   const annotationRef = useRef(props.annotations)
@@ -99,6 +101,12 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
     preferences.current = props.preferences
     annotationRef.current = props.annotations
   })
+  const clearSelection = useCallback(() => {
+    selected.current = null
+    for (const { doc } of viewRef.current?.renderer?.getContents() ?? [])
+      doc.defaultView?.getSelection()?.removeAllRanges()
+    callbacks.current.onSelection(null)
+  }, [])
 
   useImperativeHandle(
     ref,
@@ -114,6 +122,7 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
       async navigate(locator) {
         const view = viewRef.current
         if (!view) throw new Error('阅读器尚未就绪。')
+        clearSelection()
         const result = await view.goTo(locator.cfi)
         if (!result) {
           const exact = locator.quote?.exact
@@ -123,12 +132,15 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
         }
       },
       async goTo(target) {
+        clearSelection()
         await viewRef.current?.goTo(target)
       },
       async previous() {
+        clearSelection()
         await viewRef.current?.prev()
       },
       async next() {
+        clearSelection()
         await viewRef.current?.next()
       },
       setPreferences(value) {
@@ -137,19 +149,16 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
       getParagraphs() {
         return loaded.paragraphs
       },
-      clearSelection() {
-        selected.current = null
-        for (const { doc } of viewRef.current?.renderer?.getContents() ?? [])
-          doc.defaultView?.getSelection()?.removeAllRanges()
-        callbacks.current.onSelection(null)
-      },
+      clearSelection,
     }),
-    [loaded],
+    [loaded, clearSelection],
   )
 
   useEffect(() => {
     const view = new View()
     viewRef.current = view
+    selected.current = null
+    gestures.current.cancel()
     view.setAttribute('aria-label', loaded.record.title)
     view.setAttribute('role', 'document')
     host.current?.append(view)
@@ -166,40 +175,41 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
     view.addEventListener('load', (event) => {
       const { doc, index } = (event as CustomEvent<{ doc: Document; index: number }>).detail
       let touchGesture = false
-      let down: { x: number; y: number; time: number; touch: boolean } | null = null
       const pointerDown = (event: PointerEvent) => {
         dragging = false
         touchGesture = event.pointerType === 'touch'
-        down = {
-          x: event.clientX,
-          y: event.clientY,
-          time: Date.now(),
-          touch: event.pointerType === 'touch',
-        }
+        gestures.current.start(event, !!selected.current || !!doc.getSelection()?.toString())
+      }
+      const pointerMove = (event: PointerEvent) => {
+        gestures.current.move(event)
+      }
+      const pointerCancel = () => {
+        dragging = true
+        gestures.current.cancel()
       }
       const updateSelection = () => {
         const selection = doc.defaultView?.getSelection()
         if (!selection || selection.isCollapsed || !selection.rangeCount) return
         const point = pointFromRange(view, loaded, selection.getRangeAt(0), index, true)
         if (point?.text) {
+          gestures.current.select()
+          if (
+            selected.current?.locator.cfi === point.locator.cfi &&
+            selected.current.text === point.text
+          )
+            return
           selected.current = point
           callbacks.current.onSelection(point)
         }
       }
       const pointerUp = (event: PointerEvent) => {
         const selection = doc.defaultView?.getSelection()
-        if (down) {
-          const dx = event.clientX - down.x
-          const dy = event.clientY - down.y
-          dragging = Math.hypot(dx, dy) > 8 || Date.now() - down.time > 500
-          if (down.touch && Math.abs(dx) > 70 && Math.abs(dy) < 40 && selection?.isCollapsed)
-            callbacks.current.onTap(dx > 0 ? 'previous' : 'next')
-          down = null
-        }
-        if (!selection || selection.isCollapsed) {
-          selected.current = null
-          callbacks.current.onSelection(null)
-        } else updateSelection()
+        const active = !!selection && !selection.isCollapsed && !!selection.rangeCount
+        const result = gestures.current.end(event, active)
+        dragging = gestures.current.blocksClick(false)
+        if (active) updateSelection()
+        else if (result.dismiss) clearSelection()
+        if (result.turn) callbacks.current.onTap(result.turn)
       }
       const keydown = (event: KeyboardEvent) => {
         if (event.key === 'Escape') {
@@ -210,15 +220,19 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
           event.altKey ||
           event.ctrlKey ||
           event.metaKey ||
+          event.shiftKey ||
+          selected.current ||
           !doc.defaultView?.getSelection()?.isCollapsed
         )
           return
         if (event.key === 'ArrowRight') {
           event.preventDefault()
+          clearSelection()
           void view.next()
         }
         if (event.key === 'ArrowLeft') {
           event.preventDefault()
+          clearSelection()
           void view.prev()
         }
       }
@@ -227,7 +241,13 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
         queueMicrotask(() => {
           const hit = annotationClicked
           annotationClicked = false
-          if (hit || dragging || !doc.defaultView?.getSelection()?.isCollapsed) return
+          if (
+            hit ||
+            dragging ||
+            gestures.current.blocksClick(!!selected.current) ||
+            !doc.defaultView?.getSelection()?.isCollapsed
+          )
+            return
           const target = event.target as Element | null
           if (target?.closest('a, button, input, textarea, select, label')) return
           const bounds = host.current?.getBoundingClientRect()
@@ -248,21 +268,25 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
       }
       doc.addEventListener('selectionchange', updateSelection)
       doc.addEventListener('pointerdown', pointerDown)
+      doc.addEventListener('pointermove', pointerMove)
       doc.addEventListener('pointerup', pointerUp)
+      doc.addEventListener('pointercancel', pointerCancel)
       doc.addEventListener('keydown', keydown)
       doc.addEventListener('click', click)
       cleanupDocuments.push(() => {
         doc.removeEventListener('selectionchange', updateSelection)
         doc.removeEventListener('pointerdown', pointerDown)
+        doc.removeEventListener('pointermove', pointerMove)
         doc.removeEventListener('pointerup', pointerUp)
+        doc.removeEventListener('pointercancel', pointerCancel)
         doc.removeEventListener('keydown', keydown)
         doc.removeEventListener('click', click)
       })
     })
     view.addEventListener('relocate', (event) => {
       const location = (event as CustomEvent<FoliateLocation>).detail
-      selected.current = null
-      callbacks.current.onSelection(null)
+      // Reflow and font/viewport changes retain the captured text and its stable CFI.
+      if (location.reason !== 'anchor') clearSelection()
       const point = pointFromRange(view, loaded, location.range, location.section.current, false)
       if (point)
         callbacks.current.onPosition(
@@ -311,6 +335,7 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
         return
       }
       view.renderer.setAttribute('flow', 'paginated')
+      view.renderer.setAttribute('host-controls-input', '')
       view.renderer.setAttribute('max-column-count', '1')
       view.renderer.setAttribute('max-inline-size', '760px')
       view.renderer.setAttribute('gap', '8%')
@@ -331,7 +356,7 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
       view.remove()
       if (viewRef.current === view) viewRef.current = null
     }
-  }, [loaded])
+  }, [loaded, clearSelection])
 
   useEffect(() => {
     viewRef.current?.renderer?.setStyles(readerStyles(props.preferences))
@@ -354,9 +379,16 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
     <div
       className="reader-surface"
       ref={host}
+      onPointerDown={(event) => gestures.current.start(event, !!selected.current)}
+      onPointerMove={(event) => gestures.current.move(event)}
+      onPointerUp={(event) => {
+        const { turn } = gestures.current.end(event, !!selected.current)
+        if (turn) callbacks.current.onTap(turn)
+      }}
+      onPointerCancel={() => gestures.current.cancel()}
       onClick={(event) => {
         // Iframe events are handled inside the publication; this covers the engine's outer margins.
-        if (selected.current) return
+        if (gestures.current.blocksClick(!!selected.current)) return
         const bounds = event.currentTarget.getBoundingClientRect()
         const fraction = (event.clientX - bounds.left) / bounds.width
         callbacks.current.onTap(fraction < 0.25 ? 'previous' : fraction > 0.75 ? 'next' : 'center')

@@ -1033,6 +1033,9 @@ foliate-view {
   width: 100%;
   height: 100%;
 }
+.reader-surface {
+  touch-action: pan-y pinch-zoom;
+}
 .reader-loading {
   position: absolute;
   inset: 0;
@@ -2206,7 +2209,7 @@ foliate-view {
     width: 40%;
   }
 }
-@media (max-width: 800px) {
+@media (max-width: 800px), (orientation: portrait) and (pointer: coarse) {
   .reader-header {
     height: 62px;
     min-height: 62px;
@@ -2239,11 +2242,17 @@ foliate-view {
   .companion-toggle > span {
     display: none;
   }
-  .reading-layout.with-assistant {
+  .reading-layout,
+  .reading-layout.toc-open,
+  .reading-layout.with-assistant,
+  .reading-layout.toc-open.with-assistant {
     grid-template-columns: minmax(0, 1fr);
   }
-  .reading-layout.with-assistant .reading-main {
-    padding-bottom: var(--panel-height);
+  .toc-open .toc-panel {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 245px;
+    z-index: 20;
   }
   .assistant-panel {
     position: absolute;
@@ -2251,6 +2260,7 @@ foliate-view {
     left: 0;
     right: 0;
     height: var(--panel-height);
+    max-height: calc(100% - 24px);
     border-radius: 15px 15px 0 0;
     border: 1px solid var(--line);
     box-shadow: 0 -7px 30px #223b2510;
@@ -2866,7 +2876,7 @@ foliate-view {
 .immersive .book-notes-panel {
   top: 84px;
 }
-@media (max-width: 800px) {
+@media (max-width: 800px), (orientation: portrait) and (pointer: coarse) {
   .thinking-settings {
     grid-template-columns: 1fr;
     gap: 0;
@@ -2892,6 +2902,9 @@ foliate-view {
     top: auto;
     bottom: 59px;
     height: var(--panel-height);
+  }
+  .immersive .reading-layout.with-assistant .selection-toolbar {
+    bottom: calc(var(--panel-height) + 65px);
   }
   .immersive .reader-header-left .reader-title {
     max-width: 100px;

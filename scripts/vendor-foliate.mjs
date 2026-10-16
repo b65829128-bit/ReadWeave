@@ -31,6 +31,12 @@ export const makeBook = async () => { throw new Error('Use the ReadWeave EPUB im
 
 ` +
   view.slice(view.indexOf('class CursorAutohider'))
+const locationBefore = 'this.lastLocation = { ...progress, tocItem, pageItem, cfi, range }'
+if (!view.includes(locationBefore)) throw new Error('Relocation reason patch no longer applies')
+view = view.replace(
+  locationBefore,
+  'this.lastLocation = { ...progress, tocItem, pageItem, cfi, range, reason }',
+)
 await writeFile(viewPath, view)
 const paginatorPath = `${destination}/paginator.js`
 let paginator = (await readFile(paginatorPath, 'utf8')).replaceAll('\r\n', '\n')
@@ -67,6 +73,14 @@ const replacements = [
     'this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())',
     'this.#view?.document?.fonts?.ready?.then(() => this.#view?.document && this.#view.expand())',
   ],
+  [
+    'const checkPointerSelection = debounce((range, sel) => {',
+    "const checkPointerSelection = debounce((range, sel) => {\n            if (this.hasAttribute('host-controls-input')) return",
+  ],
+  ...['#onTouchStart(e)', '#onTouchMove(e)', '#onTouchEnd()'].map((method) => [
+    `${method} {`,
+    `${method} {\n        if (this.hasAttribute('host-controls-input')) return`,
+  ]),
 ]
 for (const [before, after] of replacements) {
   if (!paginator.includes(before)) throw new Error(`Lifecycle patch no longer applies: ${before}`)
@@ -106,4 +120,4 @@ for (const [before, after] of cfiReplacements) {
   cfi = cfi.replace(before, after)
 }
 await writeFile(cfiPath, cfi)
-console.log(`Vendored foliate-js ${commit} with four documented patch groups.`)
+console.log(`Vendored foliate-js ${commit} with five documented patch groups.`)

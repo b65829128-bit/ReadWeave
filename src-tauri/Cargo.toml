@@ -1,6 +1,6 @@
 [package]
 name = "readweave"
-version = "0.1.0-alpha.9"
+version = "0.1.0-alpha.10"
 description = "Local-first EPUB reader"
 authors = ["ReadWeave contributors"]
 edition = "2021"
