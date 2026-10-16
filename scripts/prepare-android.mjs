@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -35,6 +35,16 @@ patchedApplication = setAttribute(
   '@xml/readweave_data_extraction_rules',
 )
 manifest = manifest.replace(application, patchedApplication)
+const activity = manifest.match(/<activity\b[^>]*android:name="\.MainActivity"[^>]*>/s)?.[0]
+if (!activity) throw new Error('Android manifest has no MainActivity.')
+manifest = manifest.replace(
+  activity,
+  setAttribute(activity, 'android:windowSoftInputMode', 'adjustResize'),
+)
+await copyFile(
+  resolve(root, 'src-tauri/android/MainActivity.kt'),
+  resolve(androidRoot, 'java/app/readweave/reader/MainActivity.kt'),
+)
 
 const xmlRoot = resolve(androidRoot, 'res/xml')
 await mkdir(xmlRoot, { recursive: true })

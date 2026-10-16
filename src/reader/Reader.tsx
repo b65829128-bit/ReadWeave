@@ -103,6 +103,7 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
   })
   const clearSelection = useCallback(() => {
     selected.current = null
+    viewRef.current?.renderer?.setSelectionLocked?.(false)
     for (const { doc } of viewRef.current?.renderer?.getContents() ?? [])
       doc.defaultView?.getSelection()?.removeAllRanges()
     callbacks.current.onSelection(null)
@@ -193,6 +194,7 @@ export const Reader = forwardRef<ReaderAdapter, Props>(function Reader(props, re
         const point = pointFromRange(view, loaded, selection.getRangeAt(0), index, true)
         if (point?.text) {
           gestures.current.select()
+          view.renderer.setSelectionLocked?.(true)
           if (
             selected.current?.locator.cfi === point.locator.cfi &&
             selected.current.text === point.text

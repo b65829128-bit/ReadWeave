@@ -2,6 +2,10 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import 'katex/dist/katex.min.css'
 import './styles.css'
+import { trackReaderLayout } from './reader/layout'
+
+const releaseLayout = trackReaderLayout()
+import.meta.hot?.dispose(releaseLayout)
 
 // foliate-js uses Object.groupBy; retain a narrow fallback for older Android WebViews.
 if (!Object.groupBy) {

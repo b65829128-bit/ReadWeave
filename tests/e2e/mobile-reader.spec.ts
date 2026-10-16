@@ -73,7 +73,27 @@ for (const viewport of [
       expect(await page.locator('.reader-host').boundingBox()).toEqual(bounds)
       await page.getByRole('button', { name: '收起目录' }).click()
       await page.getByRole('textbox', { name: '向阅读伙伴提问' }).fill('解释所选原文。')
-      await page.setViewportSize({ width: viewport.width, height: viewport.height - 150 })
+      const metrics = await page.context().newCDPSession(page)
+      await metrics.send('Emulation.setDeviceMetricsOverride', {
+        width: viewport.width,
+        height: Math.round(viewport.height * 0.5),
+        screenWidth: viewport.width,
+        screenHeight: viewport.height,
+        screenOrientation: { type: 'portraitPrimary', angle: 0 },
+        deviceScaleFactor: 1,
+        mobile: true,
+      })
+      await expect(page.locator('html')).toHaveAttribute('data-reader-panel', 'bottom')
+      const inputBounds = (await page
+        .getByRole('textbox', { name: '向阅读伙伴提问' })
+        .boundingBox())!
+      expect(inputBounds.y + inputBounds.height).toBeLessThanOrEqual(
+        Math.round(viewport.height * 0.5),
+      )
+      const composerBounds = (await page.locator('.composer').boundingBox())!
+      expect(composerBounds.y + composerBounds.height).toBeLessThanOrEqual(
+        Math.round(viewport.height * 0.5),
+      )
       await expect(page.locator('.selection-preview')).toContainText(selected.slice(0, 110))
       await page.getByRole('button', { name: '发送问题' }).click()
       await expect(page.getByRole('dialog')).toContainText('发送前，看看会分享什么')
@@ -143,6 +163,29 @@ test.describe('touch selection navigation', () => {
         touch('touchend', 20, true)
       })
     await expect(page.locator('.selection-toolbar')).toBeVisible()
+    // Native Android handles bypass pointer events and can scroll overflow:hidden directly.
+    const lockedStart = await page.locator('foliate-view').evaluate((element) => {
+      const renderer = (
+        element as HTMLElement & {
+          renderer: { start: number; scrollBy(x: number, y: number): void }
+        }
+      ).renderer
+      const start = renderer.start
+      renderer.scrollBy(120, 0)
+      return start
+    })
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    )
+    const restoredStart = await page
+      .locator('foliate-view')
+      .evaluate(
+        (element) => (element as HTMLElement & { renderer: { start: number } }).renderer.start,
+      )
+    expect(Math.abs(restoredStart - lockedStart)).toBeLessThan(1)
     // The upstream pointer-selection timer used to turn a page after 700ms.
     await page.waitForTimeout(1100)
     expect(await currentCFI(page)).toBe(original)

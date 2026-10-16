@@ -458,6 +458,16 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
+    #selectionLock = null
+    setSelectionLocked(locked) {
+        if (!locked) this.#selectionLock = null
+        else if (this.#selectionLock === null && !this.scrolled)
+            this.#selectionLock = this.#container[this.scrollProp]
+    }
+    #setScrollPosition(offset) {
+        if (this.#selectionLock !== null) this.#selectionLock = offset
+        this.#container[this.scrollProp] = offset
+    }
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -565,7 +575,15 @@ export class Paginator extends HTMLElement {
         this.#footer = this.#root.getElementById('footer')
 
         this.#observer.observe(this.#container)
-        this.#container.addEventListener('scroll', () => this.dispatchEvent(new Event('scroll')))
+        this.#container.addEventListener('scroll', () => {
+            // Android selection handles can scroll overflow:hidden without pointer events.
+            if (this.#selectionLock !== null &&
+                Math.abs(this.#container[this.scrollProp] - this.#selectionLock) > 1) {
+                this.#container[this.scrollProp] = this.#selectionLock
+                return
+            }
+            this.dispatchEvent(new Event('scroll'))
+        })
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.scrolled) {
                 if (this.#justAnchored) this.#justAnchored = false
@@ -905,6 +923,7 @@ export class Paginator extends HTMLElement {
         const element = this.#container
         const { scrollProp, size } = this
         if (element[scrollProp] === offset) {
+            if (this.#selectionLock !== null) this.#selectionLock = offset
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
             return
@@ -913,13 +932,13 @@ export class Paginator extends HTMLElement {
         if (this.scrolled && this.#vertical) offset = -offset
         if ((reason === 'snap' || smooth) && this.hasAttribute('animated')) return animate(
             element[scrollProp], offset, 300, easeOutQuad,
-            x => element[scrollProp] = x,
+            x => this.#setScrollPosition(x),
         ).then(() => {
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
         })
         else {
-            element[scrollProp] = offset
+            this.#setScrollPosition(offset)
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
         }

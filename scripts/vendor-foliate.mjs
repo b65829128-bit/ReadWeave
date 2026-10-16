@@ -81,6 +81,20 @@ const replacements = [
     `${method} {`,
     `${method} {\n        if (this.hasAttribute('host-controls-input')) return`,
   ]),
+  [
+    '    #lastVisibleRange\n',
+    '    #lastVisibleRange\n    #selectionLock = null\n    setSelectionLocked(locked) {\n        if (!locked) this.#selectionLock = null\n        else if (this.#selectionLock === null && !this.scrolled)\n            this.#selectionLock = this.#container[this.scrollProp]\n    }\n    #setScrollPosition(offset) {\n        if (this.#selectionLock !== null) this.#selectionLock = offset\n        this.#container[this.scrollProp] = offset\n    }\n',
+  ],
+  [
+    "this.#container.addEventListener('scroll', () => this.dispatchEvent(new Event('scroll')))",
+    "this.#container.addEventListener('scroll', () => {\n            // Android selection handles can scroll overflow:hidden without pointer events.\n            if (this.#selectionLock !== null &&\n                Math.abs(this.#container[this.scrollProp] - this.#selectionLock) > 1) {\n                this.#container[this.scrollProp] = this.#selectionLock\n                return\n            }\n            this.dispatchEvent(new Event('scroll'))\n        })",
+  ],
+  [
+    'if (element[scrollProp] === offset) {',
+    'if (element[scrollProp] === offset) {\n            if (this.#selectionLock !== null) this.#selectionLock = offset',
+  ],
+  ['x => element[scrollProp] = x,', 'x => this.#setScrollPosition(x),'],
+  ['            element[scrollProp] = offset\n', '            this.#setScrollPosition(offset)\n'],
 ]
 for (const [before, after] of replacements) {
   if (!paginator.includes(before)) throw new Error(`Lifecycle patch no longer applies: ${before}`)

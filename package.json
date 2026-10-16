@@ -1,7 +1,7 @@
 {
   "name": "readweave",
   "private": true,
-  "version": "0.1.0-alpha.10",
+  "version": "0.1.0-alpha.11",
   "description": "在原文旁理解，顺畅继续阅读。",
   "type": "module",
   "license": "Apache-2.0",

@@ -1230,6 +1230,7 @@ foliate-view {
   gap: 5px;
 }
 .assistant-composer {
+  flex-shrink: 0;
   padding: 12px 18px 16px;
 }
 .quick-actions {
@@ -2209,7 +2210,7 @@ foliate-view {
     width: 40%;
   }
 }
-@media (max-width: 800px), (orientation: portrait) and (pointer: coarse) {
+:where(html[data-reader-panel='bottom']) {
   .reader-header {
     height: 62px;
     min-height: 62px;
@@ -2876,7 +2877,7 @@ foliate-view {
 .immersive .book-notes-panel {
   top: 84px;
 }
-@media (max-width: 800px), (orientation: portrait) and (pointer: coarse) {
+:where(html[data-reader-panel='bottom']) {
   .thinking-settings {
     grid-template-columns: 1fr;
     gap: 0;
@@ -2908,6 +2909,34 @@ foliate-view {
   }
   .immersive .reader-header-left .reader-title {
     max-width: 100px;
+  }
+}
+@media (max-height: 600px) {
+  :where(html[data-reader-panel='bottom']) {
+    .assistant-panel {
+      height: calc(100% - 12px);
+      max-height: calc(100% - 12px);
+    }
+    .assistant-heading {
+      min-height: 44px;
+      flex-shrink: 0;
+      padding: 6px 15px;
+    }
+    .assistant-content {
+      padding: 8px 15px;
+    }
+    .selection-preview {
+      max-height: 50px;
+      overflow: auto;
+    }
+    .composer-disclaimer,
+    .mobile-panel-size {
+      display: none;
+    }
+    .immersive .assistant-panel {
+      bottom: 0;
+      height: calc(100% - 72px);
+    }
   }
 }
 @media (prefers-reduced-motion: reduce) {

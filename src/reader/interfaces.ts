@@ -15,6 +15,7 @@ export interface FoliateView extends HTMLElement {
     setAttribute(name: string, value: string): void
     setStyles(css: string): void
     getContents(): { doc: Document; index: number }[]
+    setSelectionLocked?(locked: boolean): void
   }
   lastLocation?: FoliateLocation
   open(book: EPUB): Promise<void>
