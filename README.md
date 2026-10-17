@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.12`，处于 **P0 技术验证中**，已有阅读与问答原型、原生阅读核心和统一任务入口。本轮加入 AstrBot v4.27.4 适配器与桥接插件，本机协议测试通过，服务器安装后的真实 Agent 联调仍待验收。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.12`，处于 **P0 技术验证中**，已有阅读与问答原型、原生阅读核心和统一任务入口。AstrBot v4.27.4 适配器与桥接插件已通过本机协议测试，用户也已在实际 Bot 上人工确认工具调用和原文引用正常；取消、断线、隔离及 Android / 公网接入继续分别验收。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -51,7 +51,7 @@ src-tauri/target/release/readweave.exe
 src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.12_x64-setup.exe
 ```
 
-本轮 Windows alpha.12 直接运行包为 `.local/ReadWeave-alpha.12.exe`，安装包为 `.local/ReadWeave-alpha.12-setup.exe`，AstrBot 插件为 `.local/astrbot/astrbot_plugin_readweave-0.1.0.zip`。固定文件清单可用 `node scripts/package-astrbot.mjs` 重建插件。真实远程链路尚待安装后的验收。
+本轮 Windows alpha.12 直接运行包为 `.local/ReadWeave-alpha.12.exe`，安装包为 `.local/ReadWeave-alpha.12-setup.exe`，AstrBot 插件为 `.local/astrbot/astrbot_plugin_readweave-0.1.0.zip`。固定文件清单可用 `node scripts/package-astrbot.mjs` 重建插件。真实 Bot、工具和原文引用已由用户人工验证，后续稳定性与平台验收见验证记录。
 
 Android 当前已验证的测试 APK 仍为 `.local/ReadWeave-alpha.11.apk`。alpha.11 曾在 Android 16 / WebView 138 真机复现并修正慢滑失效、原生选区手柄导致半页偏移和键盘遮挡；诊断副本验证整页边界及横竖屏键盘，正式 APK 已安装并检查书架和键盘界面。真实模型引用和长时间阅读仍待继续验收。APK 使用 Android Debug 开发证书，release 应用调试已关闭。文件校验值和实际范围见 [验证记录](docs/validation.md)。
 
