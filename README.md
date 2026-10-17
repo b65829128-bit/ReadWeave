@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.13`，处于 **P0 技术验证中**，已有阅读与问答原型、原生阅读核心和统一任务入口。alpha.12 的 AstrBot v4.27.4 基本闭环已有用户人工确认；alpha.13 改为停止后保留对话，下一问重建授权并沿用原阅读边界，本机回归通过，真实部署待复测。断线、隔离及 Android / 公网接入继续分别验收。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.14`，处于 **P0 技术验证中**，已有阅读与问答原型、原生阅读核心和统一任务入口。alpha.12 的 AstrBot v4.27.4 基本闭环已有用户人工确认；alpha.13 的手动停止保留可见历史也已获用户确认。alpha.14 补上工具上限等异常结束后继续追问时的历史保留，并明确反馈读取额度，本机验证与实际部署复测分别记录。断线、隔离及 Android / 公网接入继续分别验收。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -48,10 +48,10 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.13_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.14_x64-setup.exe
 ```
 
-本轮 Windows alpha.13 直接运行包为 `.local/ReadWeave-alpha.13.exe`，安装包为 `.local/ReadWeave-alpha.13-setup.exe`，AstrBot 插件为 `.local/astrbot/astrbot_plugin_readweave-0.1.1.zip`。本轮需更新客户端及桥接插件，AstrBot 自身继续固定 v4.27.4；原 SSH 端口转发不变。固定文件清单可用 `node scripts/package-astrbot.mjs` 重建插件。旧包保留，后续稳定性与平台验收见验证记录。
+本轮 Windows alpha.14 直接运行包为 `.local/ReadWeave-alpha.14.exe`，安装包为 `.local/ReadWeave-alpha.14-setup.exe`。已安装桥接插件 0.1.1 的实例只需更新客户端；插件仍为 `.local/astrbot/astrbot_plugin_readweave-0.1.1.zip`，AstrBot 自身继续固定 v4.27.4，原 SSH 端口转发不变。固定文件清单可用 `node scripts/package-astrbot.mjs` 重建插件。旧包保留，后续稳定性与平台验收见验证记录。
 
 Android 当前已验证的测试 APK 仍为 `.local/ReadWeave-alpha.11.apk`。alpha.11 曾在 Android 16 / WebView 138 真机复现并修正慢滑失效、原生选区手柄导致半页偏移和键盘遮挡；诊断副本验证整页边界及横竖屏键盘，正式 APK 已安装并检查书架和键盘界面。真实模型引用和长时间阅读仍待继续验收。APK 使用 Android Debug 开发证书，release 应用调试已关闭。文件校验值和实际范围见 [验证记录](docs/validation.md)。
 
@@ -74,6 +74,8 @@ AstrBot 接入：在设置中选择「AstrBot v4.27.4 · 内置 Agent」，使�
 取消勾选“启用阅读伙伴”会停止当前回答并撤销该话题的读取授权，保留模型设置和系统密钥。重新启用后，新话题再次预览要发送的资料。
 
 “停止回答”保留当前对话与引用；下一问继续原问题、原位置与原范围，并重新建立读取授权。AstrBot 使用新的专用后端会话承接最近的可见历史，旧停止操作不能指向新执行。换书、改范围、改设置或开始新话题仍另开对话；异常断线不自动重发资料。
+
+alpha.14 在工具上限或其他执行异常后也保留同一对话，下一次由用户发起的追问重建授权与连接。每份授权最多六次读取，正常追问共享这份额度，并非限制聊天次数；额度耗尽后会告知 Bot 使用已有资料回答，额外请求只得到拒绝。持续重复请求仍会终止本轮，但保留已有消息和引用。
 
 DeepSeek 默认建议模型为 `deepseek-flash`，也可选 `deepseek-v4-pro` 或填写自己的模型名称。选择“DeepSeek”服务类型后，可以开关思考模式、设置 `low / high / max` 强度和单次输出预算。思考过程与最终回答分别显示；工具调用可展开查看详情，保存的问答和 JSON 备份保留这些记录。旧配置的模型名称会保留，旧备份仍可读取。
 
