@@ -9,6 +9,7 @@ import type {
   Snapshot,
 } from './types'
 import contract from './reading-contract.json'
+import toolDefinitions from './reading-tools.json'
 import { textSlice, textTail, validTextOffset } from './text'
 
 export const searchInput = z
@@ -324,23 +325,4 @@ export function verifiedCitations(markdown: string, evidence: readonly Fragment[
   )
 }
 
-export const readingToolDefinitions = [
-  {
-    type: 'function',
-    function: {
-      name: 'book_search',
-      description:
-        '在当前冻结任务的授权书籍和读取范围内搜索原文。使用短且具体的词语。最多返回五条，indexStatus=scan 表示受限文本扫描。',
-      parameters: z.toJSONSchema(searchInput),
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'book_read_passage',
-      description:
-        '读取宿主签发的不透明 ref 对应片段或少量邻近段落。不能访问路径、URL、其他书籍或范围之外的正文。',
-      parameters: z.toJSONSchema(passageInput),
-    },
-  },
-]
+export const readingToolDefinitions = toolDefinitions

@@ -9,6 +9,8 @@ src-tauri/gen/
 playwright-report/
 test-results/
 .local/
+__pycache__/
+.ruff_cache/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db

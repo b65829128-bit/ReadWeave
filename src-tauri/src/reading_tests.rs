@@ -131,6 +131,187 @@ fn code<T: std::fmt::Debug>(result: CoreResult<T>, expected: &str) {
 }
 
 #[test]
+fn delegated_tools_keep_host_scope_budget_and_evidence_ownership() {
+    let mut f = Fixture::new(blocks());
+    let task = f.create(ReadScope::ToPosition);
+    let peer = "astrbot:test_peer";
+    code(
+        f.core
+            .search(&mut f.db, peer, &task.run_id, json!({"query":"丞相"})),
+        "CALLER_MISMATCH",
+    );
+    f.core.delegate(CALLER, &task.run_id, peer).unwrap();
+    code(
+        f.core.delegate(peer, &task.run_id, "astrbot:other"),
+        "CALLER_MISMATCH",
+    );
+    code(f.core.revoke(peer, &task.run_id), "CALLER_MISMATCH");
+    code(f.core.evidence(peer, &task.run_id), "CALLER_MISMATCH");
+    code(
+        f.core.search(
+            &mut f.db,
+            peer,
+            &task.run_id,
+            json!({"query":"秘密", "scope":"book"}),
+        ),
+        "INVALID_ARGUMENT",
+    );
+    let hidden = f
+        .core
+        .search(&mut f.db, peer, &task.run_id, json!({"query":"秘密"}))
+        .unwrap();
+    assert!(hidden.fragments.is_empty());
+    let result = f
+        .core
+        .search(&mut f.db, peer, &task.run_id, json!({"query":"丞相"}))
+        .unwrap();
+    assert!(!result.fragments.is_empty());
+    let fragment = &result.fragments[0];
+    assert!(f
+        .core
+        .evidence(CALLER, &task.run_id)
+        .unwrap()
+        .iter()
+        .any(|item| item.citation_id == fragment.citation_id));
+    f.core
+        .resolve(
+            &f.db,
+            CALLER,
+            &task.snapshot.book_id,
+            &task.snapshot.book_version,
+            fragment,
+        )
+        .unwrap();
+    assert_eq!(f.core.grants[&task.run_id].calls, 3);
+    f.core.revoke(CALLER, &task.run_id).unwrap();
+    assert!(f.core.grants[&task.run_id].delegates.is_empty());
+    code(
+        f.core
+            .search(&mut f.db, peer, &task.run_id, json!({"query":"丞相"})),
+        "CALLER_MISMATCH",
+    );
+}
+
+#[tokio::test]
+async fn native_mcp_wire_handshake_tools_scope_and_revocation() {
+    use std::sync::{Arc, Mutex};
+    let mut f = Fixture::new(blocks());
+    let task = f.create(ReadScope::ToPosition);
+    let db = Arc::new(Mutex::new(f.db));
+    let core = Arc::new(Mutex::new(f.core));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (_, peer) = crate::reading_mcp::ReadingMcpPeer::open(
+        db,
+        core.clone(),
+        task.run_id.clone(),
+        move |value| tx.send(value).is_ok(),
+    )
+    .unwrap();
+    peer.send(vec![json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{"protocolVersion":"2025-11-25", "capabilities":{}, "clientInfo":{"name":"ReadWeave wire test", "version":"1"}}})]).await.unwrap();
+    let init = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(init["id"], 1);
+    assert!(init["result"]["capabilities"]["tools"].is_object());
+    peer.send(vec![
+        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0", "id":2, "method":"tools/list"}),
+    ])
+    .await
+    .unwrap();
+    let listed = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 2);
+    peer.send(vec![json!({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params":{"name":"book_search", "arguments":{"query":"秘密"}}})]).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let content: Value =
+        serde_json::from_str(result["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(content["fragments"].as_array().unwrap().is_empty());
+    core.lock().unwrap().revoke(CALLER, &task.run_id).unwrap();
+    peer.send(vec![json!({"jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{"name":"book_search", "arguments":{"query":"丞相"}}})]).await.unwrap();
+    let rejected = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rejected["result"]["isError"], true);
+    assert!(!rejected.to_string().contains("丞相负责"));
+    peer.close(&core).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Python MCP SDK; set READWEAVE_TEST_PYTHON and run explicitly"]
+async fn official_python_mcp_client_interoperates_with_native_reading_core() {
+    use std::{
+        io::{BufRead, Write},
+        process::{Command, Stdio},
+        sync::{Arc, Mutex},
+    };
+    let python = std::env::var("READWEAVE_TEST_PYTHON").expect("Set READWEAVE_TEST_PYTHON");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut f = Fixture::new(blocks());
+    let task = f.create(ReadScope::ToPosition);
+    let core = Arc::new(Mutex::new(f.core));
+    let db = Arc::new(Mutex::new(f.db));
+    let mut process = Command::new(python)
+        .arg(root.join("integrations/astrbot/interop_client.py"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = Mutex::new(process.stdin.take().unwrap());
+    let output = process.stdout.take().unwrap();
+    let (_, peer) = crate::reading_mcp::ReadingMcpPeer::open(
+        db,
+        core.clone(),
+        task.run_id.clone(),
+        move |frame| {
+            let mut input = input.lock().unwrap();
+            writeln!(input, "{frame}")
+                .and_then(|_| input.flush())
+                .is_ok()
+        },
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Handle::current();
+    let sending = peer.clone();
+    let exchange = tokio::task::spawn_blocking(move || {
+        for line in std::io::BufReader::new(output).lines() {
+            let frame = serde_json::from_str(&line.unwrap()).unwrap();
+            runtime.block_on(sending.send(vec![frame])).unwrap();
+        }
+    });
+    let child = tokio::task::spawn_blocking(move || process.wait_with_output().unwrap());
+    let result = tokio::time::timeout(Duration::from_secs(45), child)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "Python MCP client failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    exchange.await.unwrap();
+    assert!(
+        core.lock()
+            .unwrap()
+            .evidence(CALLER, &task.run_id)
+            .unwrap()
+            .len()
+            > task.snapshot.initial.len()
+    );
+    peer.close(&core).await.unwrap();
+}
+
+#[test]
 fn large_books_fit_the_shared_block_budget_and_excess_is_rejected_atomically() {
     let blocks: Vec<_> = (0..limits().max_blocks)
         .map(|ordinal| block(ordinal / 500, ordinal, "大书的规范化正文。", "章节"))

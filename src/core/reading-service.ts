@@ -18,6 +18,7 @@ export interface ReadingTask {
   search(input: unknown): Promise<ToolResult>
   read(input: unknown): Promise<ToolResult>
   revoke(): Promise<void>
+  syncEvidence?(): Promise<void>
   allEvidence(): Fragment[]
   resolveAnchor(fragment: Fragment): Promise<Locator | null>
 }
@@ -79,6 +80,7 @@ class NativeReadingTask implements ReadingTask {
   readonly snapshot: Snapshot
   readonly runId: string
   private revoked = false
+  private revocation: Promise<void> | null = null
   private evidence: Fragment[]
   constructor(handle: { runId: string; snapshot: Snapshot }) {
     this.runId = handle.runId
@@ -104,10 +106,16 @@ class NativeReadingTask implements ReadingTask {
   read(input: unknown) {
     return this.execute('reading_read', input)
   }
-  async revoke() {
-    if (this.revoked) return
+  revoke() {
+    if (this.revocation) return this.revocation
     this.revoked = true
-    await nativeCall('reading_revoke_task', { runId: this.runId })
+    this.revocation = nativeCall<void>('reading_revoke_task', { runId: this.runId })
+    return this.revocation
+  }
+  async syncEvidence() {
+    if (this.revoked) return
+    const evidence = await nativeCall<Fragment[]>('reading_evidence', { runId: this.runId })
+    if (!this.revoked) this.evidence = evidence
   }
   allEvidence() {
     return structuredClone(this.evidence)

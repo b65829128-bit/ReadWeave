@@ -1,0 +1,37 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "book_search",
+      "description": "在当前冻结任务的授权书籍和读取范围内搜索原文。使用短且具体的词语。最多返回五条，indexStatus=scan 表示受限文本扫描。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "maxResults": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "cursor": { "type": "string", "maxLength": 100 }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "book_read_passage",
+      "description": "读取宿主签发的不透明 ref 对应片段或少量邻近段落。不能访问路径、URL、其他书籍或范围之外的正文。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ref": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "direction": { "type": "string", "enum": ["around", "before", "after"] },
+          "paragraphs": { "type": "integer", "minimum": 1, "maximum": 6 },
+          "maxChars": { "type": "integer", "minimum": 1, "maximum": 8000 }
+        },
+        "required": ["ref"],
+        "additionalProperties": false
+      }
+    }
+  }
+]

@@ -159,6 +159,7 @@ struct Grant {
     run_id: String,
     device_id: String,
     caller: String,
+    delegates: HashSet<String>,
     snapshot: Snapshot,
     allowed: Vec<Paragraph>,
     started: Instant,
@@ -415,6 +416,7 @@ impl ReadingCore {
             run_id: opaque("run")?,
             device_id: self.device_id.clone(),
             caller: caller.to_owned(),
+            delegates: HashSet::new(),
             snapshot,
             allowed,
             started: Instant::now(),
@@ -471,7 +473,9 @@ impl ReadingCore {
             .grants
             .get_mut(run_id)
             .ok_or_else(|| error("RUN_NOT_FOUND"))?;
-        if grant.caller != caller || grant.device_id != self.device_id {
+        if (grant.caller != caller && !grant.delegates.contains(caller))
+            || grant.device_id != self.device_id
+        {
             return Err(error("CALLER_MISMATCH"));
         }
         if grant.revoked {
@@ -487,6 +491,53 @@ impl ReadingCore {
             return Err(error("BUDGET_EXCEEDED"));
         }
         Ok(grant)
+    }
+
+    // Only the native owner may delegate. The delegate is fixed by the MCP dispatcher,
+    // never by tool arguments; the original snapshot, budget and evidence owner remain.
+    pub fn delegate(&mut self, owner: &str, run_id: &str, delegate: &str) -> CoreResult<()> {
+        let grant = self
+            .grants
+            .get_mut(run_id)
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        if grant.caller != owner || grant.device_id != self.device_id {
+            return Err(error("CALLER_MISMATCH"));
+        }
+        if grant.revoked {
+            return Err(error("RUN_REVOKED"));
+        }
+        if grant.started.elapsed() > Duration::from_millis(limits().ttl_ms) {
+            return Err(error("RUN_EXPIRED"));
+        }
+        if !delegate.starts_with("astrbot:") || delegate.len() > 160 || !grant.delegates.is_empty()
+        {
+            return Err(error("INVALID_ARGUMENT"));
+        }
+        grant.delegates.insert(delegate.to_owned());
+        Ok(())
+    }
+
+    pub fn remove_delegate(&mut self, owner: &str, run_id: &str, delegate: &str) -> CoreResult<()> {
+        let grant = self
+            .grants
+            .get_mut(run_id)
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        if grant.caller != owner {
+            return Err(error("CALLER_MISMATCH"));
+        }
+        grant.delegates.remove(delegate);
+        Ok(())
+    }
+
+    pub fn evidence(&self, owner: &str, run_id: &str) -> CoreResult<Vec<Fragment>> {
+        let grant = self
+            .grants
+            .get(run_id)
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        if grant.caller != owner || grant.device_id != self.device_id {
+            return Err(error("CALLER_MISMATCH"));
+        }
+        Ok(grant.evidence.clone())
     }
 
     pub fn search(
@@ -685,6 +736,7 @@ mod tests;
 
 impl Grant {
     fn release_text(&mut self) {
+        self.delegates.clear();
         self.allowed = Vec::new();
         self.refs = HashMap::new();
         self.cursors = HashMap::new();

@@ -1,26 +1,35 @@
 use futures_util::StreamExt;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
-use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tauri::{ipc::Channel, Manager, State};
 use tokio::sync::watch;
 
+mod astrbot;
 mod book_files;
 mod credentials;
 mod database;
 mod reading;
 mod reading_commands;
+mod reading_mcp;
 mod reading_models;
 mod startup;
 #[cfg(test)]
 mod test_support;
 use reading_commands::*;
+use reading_mcp::*;
 
 struct AppState {
-    db: Mutex<Connection>,
+    db: Arc<Mutex<Connection>>,
     books: PathBuf,
     requests: Mutex<HashMap<String, watch::Sender<bool>>>,
-    reading: Mutex<reading::ReadingCore>,
+    reading: Arc<Mutex<reading::ReadingCore>>,
+    mcp: reading_mcp::PeerMap,
     credentials: Mutex<credentials::CredentialVault>,
 }
 
@@ -360,10 +369,11 @@ pub fn run() {
                 let reading = reading::ReadingCore::new(&db)
                     .map_err(|error| startup::StartupError::core("原生阅读服务", error))?;
                 app.manage(AppState {
-                    db: Mutex::new(db),
+                    db: Arc::new(Mutex::new(db)),
                     books,
                     requests: Mutex::new(HashMap::new()),
-                    reading: Mutex::new(reading),
+                    reading: Arc::new(Mutex::new(reading)),
+                    mcp: Mutex::new(HashMap::new()),
                     credentials: Mutex::new(credentials::CredentialVault::platform()),
                 });
                 let config = app.config().app.windows[0].clone();
@@ -398,7 +408,12 @@ pub fn run() {
             reading_search,
             reading_read,
             reading_revoke_task,
-            reading_resolve_anchor
+            reading_resolve_anchor,
+            reading_mcp_open,
+            astrbot::astrbot_request,
+            reading_mcp_send,
+            reading_mcp_close,
+            reading_evidence
         ]);
     match builder.build(tauri::generate_context!()) {
         Ok(app) => app.run(|_, _| {}),
