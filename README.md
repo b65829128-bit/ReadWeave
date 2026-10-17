@@ -4,18 +4,31 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.14`，处于 **P0 技术验证中**，已有阅读与问答原型、原生阅读核心和统一任务入口。alpha.12 的 AstrBot v4.27.4 基本闭环已有用户人工确认；alpha.13 的手动停止保留可见历史也已获用户确认。alpha.14 补上工具上限等异常结束后继续追问时的历史保留，并明确反馈读取额度，本机验证与实际部署复测分别记录。断线、隔离及 Android / 公网接入继续分别验收。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.14`（文档状态同步于 2026-10-18），处于 **P0 技术验证中**，已有阅读与问答原型、原生阅读核心、统一任务入口和 AstrBot 外部后端基本闭环。alpha.12 的 AstrBot v4.27.4 基本闭环、alpha.13 的手动停止保留可见历史均已获用户人工确认；alpha.14 补上工具上限等异常结束后继续追问时的历史保留，并明确反馈读取额度。Windows 交付为 alpha.14，Android 最新 APK 仍为 alpha.11；断线、隔离、真实模型服务及 Android / 公网接入继续分别验收。它还没有达到原方案的 v0.1 发布验收标准。
+
+## 状态一览
+
+| 项目         | 当前事实（2026-10-18 复核）                                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| 版本 / 阶段  | `0.1.0-alpha.14` / P0 技术验证                                                                                              |
+| 本机自动检查 | 97 项 Vitest、19 项生产 Edge 流程、37 项 Rust（2 项按设计忽略）、11 项桥接插件测试；ESLint / tsc / 构建 / fmt / clippy 通过 |
+| Windows      | alpha.14 EXE 与 NSIS 已生成，未签名，未执行安装器                                                                           |
+| Android      | 最新 APK 仍为 alpha.11；alpha.12–alpha.14 未重建 APK                                                                        |
+| 外部后端     | AstrBot v4.27.4 基本闭环经用户确认；真实部署的额度终止、断线与隔离复测待做                                                  |
+| 真实模型服务 | 尚未验收；自动化测试使用本机协议服务                                                                                        |
 
 ## 现在可以体验
 
 - 导入无 DRM、可重排 EPUB，离线书架、目录、分页、字号、行距、三种主题和位置恢复。
 - 正文最多 100,000 段，兼容 `&nbsp;` 等标准 HTML 命名实体；两本用户指定的本地书已完成导入 / 阅读 / 重开与原生保存验证，范围见 [EPUB 兼容性记录](docs/epub-compatibility.md)。
 - 大书导入只解析一次，同次运行中重开当前书复用已校验内容并保留最新位置。《资治通鉴》的实测与验证范围见 [大书性能记录](docs/epub-performance.md)。
-- 划线后提问、高亮和笔记；重选已有高亮可取消，不叠加重复高亮；点击书内标注查看、编辑或删除笔记。
+- 在书内手动搜索原文；当前为受限文本扫描，最多显示 30 条结果，不会自动把结果发送给模型。
+- 划线后提问、高亮、书签和笔记；重选已有高亮可取消，不叠加重复高亮；点击书内标注查看、编辑或删除笔记。
 - 可独立收起目录和阅读伙伴；全屏沉浸阅读，点击中间唤醒控件、两侧翻页；选文时保留标注操作。
 - 触摸选区拖动时拦截翻页；手机和触摸平板竖屏使用覆盖式回答面板，打开面板不压缩正文，排版或可用高度变化后仍保留所选原文。
 - Android 原生选区手柄拖动时保持整页位置，正常慢滑可翻页；软键盘出现时输入框和发送按钮保持可见，面板位置不随键盘改变屏幕可用高度而切换。
 - 连接自己的 Chat Completions 兼容模型服务，流式回答、追问、取消、数学排版和返回提问位置。
+- 连接 AstrBot v4.27.4 内置 Agent（需安装桥接插件）；模型与工具循环在服务器执行，书内取证仍回到设备原生核心。
 - 统一管理问答准备、发送确认、取消和有序保存；换书或停用后端后，旧轮次不会继续改写当前回答。设置中可停用阅读伙伴，重启后保持。
 - DeepSeek 思考模式与低 / 高 / 最高强度、输出预算、流式思考过程；可展开的工具名称、参数、状态和结果。
 - 冻结问题上下文；默认只提供截至提问位置的资料；首次发送前预览；两个受限书内工具与真实原文引用。
@@ -51,7 +64,7 @@ src-tauri/target/release/readweave.exe
 src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.14_x64-setup.exe
 ```
 
-本轮 Windows alpha.14 直接运行包为 `.local/ReadWeave-alpha.14.exe`，安装包为 `.local/ReadWeave-alpha.14-setup.exe`。已安装桥接插件 0.1.1 的实例只需更新客户端；插件仍为 `.local/astrbot/astrbot_plugin_readweave-0.1.1.zip`，AstrBot 自身继续固定 v4.27.4，原 SSH 端口转发不变。固定文件清单可用 `node scripts/package-astrbot.mjs` 重建插件。旧包保留，后续稳定性与平台验收见验证记录。
+alpha.14 的 Windows 直接运行包为 `.local/ReadWeave-alpha.14.exe`，安装包为 `.local/ReadWeave-alpha.14-setup.exe`。已安装桥接插件 0.1.1 的实例只需更新客户端；插件仍为 `.local/astrbot/astrbot_plugin_readweave-0.1.1.zip`，AstrBot 自身继续固定 v4.27.4，原 SSH 端口转发不变。固定文件清单可用 `node scripts/package-astrbot.mjs` 重建插件。旧包保留，后续稳定性与平台验收见验证记录。
 
 Android 当前已验证的测试 APK 仍为 `.local/ReadWeave-alpha.11.apk`。alpha.11 曾在 Android 16 / WebView 138 真机复现并修正慢滑失效、原生选区手柄导致半页偏移和键盘遮挡；诊断副本验证整页边界及横竖屏键盘，正式 APK 已安装并检查书架和键盘界面。真实模型引用和长时间阅读仍待继续验收。APK 使用 Android Debug 开发证书，release 应用调试已关闭。文件校验值和实际范围见 [验证记录](docs/validation.md)。
 
@@ -59,11 +72,13 @@ Windows 包是未签名的开发预览包。实际验收范围见 [验证记录]
 
 Windows 启动失败会显示“ReadWeave 启动诊断”，列出具体步骤和错误代码；安装目录可写时，还会在 EXE 旁留下 `ReadWeave-startup-error.log`。报告仅包含应用版本、固定步骤、错误代码和静态说明，不包含书籍、模型设置或密钥。界面缓存使用独立的 `webview-v1` 目录，书籍与记录继续使用原来的本地存储。
 
+### 历史故障与恢复（alpha.3–alpha.7）
+
 本机 alpha.3 / alpha.4 / alpha.5 的秒退已定位为生成 EXE 继承构建目录的 Low 完整性标记，导致无法写入用户数据。当前本地交付文件已修正为正常用户的 Medium 标记，alpha.5 已实际恢复书架，旧记录完整保留。用户确认《资治通鉴》在 Windows 应用中导入成功，性能问题仍待排查；打包流程的自动检查尚待补齐，详情见验证记录。
 
-alpha.6 已处理该书导入和打开时的主要耗时；随后用户日常双击启动仍遇到所有书保存失败。alpha.7 已确认实际使用的数据库损坏，完成保留原库备份的数据恢复，并增加启动前完整性检查及按原因区分的存储错误。测试环境与资源管理器的数据视图差异、恢复范围及实际验收见 [数据库修复记录](docs/storage-recovery.md)。当前本机交付文件继续核对 Medium 标记。
+alpha.6 已处理该书导入和打开时的主要耗时；随后用户日常双击启动仍遇到所有书保存失败。alpha.7 已确认实际使用的数据库损坏，完成保留原库备份的数据恢复，并增加启动前完整性检查及按原因区分的存储错误。测试环境与资源管理器的数据视图差异、恢复范围及实际验收见 [数据库修复记录](docs/storage-recovery.md)。该版交付文件继续核对 Medium 标记。
 
-首次升级旧数据库前会在数据库旁生成一致性 SQLite 备份，保留书籍、标注、问答与进度。迁移范围、回滚方式及来源校验边界见 [原生阅读核心](docs/native-reading-core.md)。
+以上为历史记录。当前首次升级旧数据库前，仍会在数据库旁生成一致性 SQLite 备份，保留书籍、标注、问答与进度；迁移范围、回滚方式及来源校验边界见 [原生阅读核心](docs/native-reading-core.md)。
 
 ## 配置阅读伙伴
 
@@ -93,6 +108,7 @@ Windows 原生客户端使用 Windows 凭据管理器，Android 使用由 Androi
 
 - 选中原文后点击“高亮”；重选该范围或其中一部分，按钮变为“取消高亮”，会移除与选文相交的高亮，笔记继续保留。直接点击黄色高亮或笔记下划线，可以在原文旁操作。
 - “本书标注”只列出当前书籍版本的高亮、笔记和书签。点击条目返回书内；外部“阅读笔记”仍用于跨书汇总和导出。
+- 顶部搜索按钮可手动查找全书原文；当前为文本扫描，最多显示 30 条，结果不会自动发送给模型。
 - 点击“全屏阅读”收起所有面板和控件。中间单击唤醒，再点中间或“继续沉浸”收起；鼠标点击两侧边距、触摸左右区域或按左右方向键翻页。鼠标在正文内优先选词，拖选和长按不会触发点击翻页，已有标注优先打开标注卡片。
 - “退出全屏阅读”或 Escape 返回普通阅读，并恢复进入前的目录 / 阅读伙伴开关。键盘 Tab 可找到“显示阅读控件”入口。
 
@@ -109,7 +125,10 @@ npm run check
 npm run test:e2e
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
+
+桥接插件的本机测试另有独立 Python 环境（不在仓库内）：`.\.local\astrbot-check\Scripts\python.exe integrations\astrbot\test_bridge.py`。其聊天 API 是测试替身，不代表真实 AstrBot 验收。
 
 浏览器测试使用本机 Microsoft Edge，针对生产构建，在独立的 `1430` 端口运行，覆盖阅读与数据流程、流式工具循环和内容安全策略。测试数据与真实服务凭据无关。
 
@@ -120,25 +139,27 @@ src/core/             数据类型、异步阅读服务 / 预览后端、动作�
 src/harness/          HarnessAdapter、ProviderAdapter、流式执行循环
 src/vendor/foliate/   固定提交的阅读引擎、原许可和补丁说明
 src-tauri/            原生阅读核心、权限 / 引用、数据库迁移、文件与网络
+integrations/astrbot/ Debian 端桥接插件、协议测试与固定工具定义
 examples/             可安装的声明式动作包
+scripts/              示例书、vendoring、Android 准备、许可与打包脚本
 tests/                契约、安全和浏览器流程测试
 docs/                 原方案、工程决策、验证记录和开发计划
 ```
 
-阅读引擎固定到 foliate-js 提交 `78914aef4466eb960965702401634c2cb348e9b1`，包含四组可复现补丁，见 [VENDOR.md](src/vendor/foliate/VENDOR.md)。数学依赖统一使用已修复旧版本问题的 KaTeX，锁文件避免嵌套依赖退回旧版。
+阅读引擎固定到 foliate-js 提交 `78914aef4466eb960965702401634c2cb348e9b1`，包含五组可复现补丁，见 [VENDOR.md](src/vendor/foliate/VENDOR.md)。数学依赖统一使用已修复旧版本问题的 KaTeX，锁文件避免嵌套依赖退回旧版。
 
 ## 尚未完成
 
-- Android 连续选区、旋转、键盘、面板与长时间阅读仍待验收。alpha.8 arm64 APK 已在 Android 16 / API 36 真机启动，并完成系统密钥保存、重启保留和删除验证；配置为 minSdk 31 / targetSdk 37，WebView 最低版本仍需实测确定。详见 [验证记录](docs/validation.md)。
-- 两个真实模型服务验收，以及 AstrBot v4.27.4 接入后的追问、停止、断线与隔离验证；Hermes / ACP 后续适配。
-- 外部 MCP 跨设备隔离与公网配对、异常后的会话恢复。任务已经通过 [统一任务与适配器入口](docs/task-runtime.md) 运行。
+- Android 连续 50 次选区、旋转组合、长时间阅读与真实模型引用仍待验收。alpha.11 已在 Android 16 / WebView 138 真机验证慢滑、原生选区手柄和横竖屏键盘；APK 仍为 alpha.11，alpha.12–alpha.14 未重建，配置为 minSdk 31 / targetSdk 37，WebView 最低版本仍需实测确定。详见 [验证记录](docs/validation.md)。
+- 两个真实模型服务验收；AstrBot v4.27.4 真实部署上的额度终止后续问、断线、换书 / 范围与跨设备隔离复测；Hermes / ACP 后续适配。
+- 公开 MCP 服务、跨设备隔离与公网配对、异常后的会话恢复。AstrBot 的任务绑定私有中继已实现并通过本机官方 Python SDK 互操作，但只服务已授权话题，不是通用 Streamable HTTP 服务。参见 [统一任务与适配器入口](docs/task-runtime.md)。
 - SQLite FTS5、中文预分词、分段索引状态。当前受限文本扫描明确返回 `indexStatus: scan`，不伪装成已完成的全文索引。
 - 数据库迁移 / 故障恢复长期验收、复杂 EPUB 样本与完整定位回退。
 - PDF / OCR、图片公式识别、联网搜索、可执行插件和云同步。
 
 EPUB 当前移除出版物 CSS、SVG 和主动内容，采用统一排版。复杂版式可能损失表现；标准文本与基础 MathML 路径仍需更多真实书籍样本验证。定位主要依赖清理后的 CFI，歧义文本不会自动跳转。参见 [开发计划](docs/roadmap.md)。
 
-本轮实施清单见 [原生核心计划](docs/native-core-plan.md)。首个外部后端为 **AstrBot v4.27.4 内置 Agent**，使用用户现有 Debian / uv 实例。正式调用身份、专用会话映射、外部配置及受限书内工具已实现，真实 Bot / 工具 / 原文引用基本闭环由用户确认；当前继续验证停止后追问与其他稳定性边界。证据、网络准备和验收步骤见 [AstrBot 接入计划](docs/astrbot-integration.md)。
+当前实施清单见 [原生核心计划](docs/native-core-plan.md)。首个外部后端为 **AstrBot v4.27.4 内置 Agent**，使用用户现有 Debian / uv 实例。正式调用身份、专用会话映射、外部配置及受限书内工具已实现，真实 Bot / 工具 / 原文引用基本闭环由用户确认；当前继续验证真实部署上的额度终止、断线、隔离与其他稳定性边界。证据、网络准备和验收步骤见 [AstrBot 接入计划](docs/astrbot-integration.md)。
 
 ## 许可
 

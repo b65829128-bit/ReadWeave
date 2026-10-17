@@ -1,6 +1,6 @@
 # 验证记录
 
-日期：2026-10-17。版本：`0.1.0-alpha.14`。以下记录本工作区已执行的检查，不代表原方案第 12 节已全部验收。alpha.2 至 alpha.13 的记录保留为历史证据。
+更新：2026-10-18。版本：`0.1.0-alpha.14`。以下记录本工作区已执行的检查，不代表原方案第 12 节已全部验收。alpha.2 至 alpha.13 的记录保留为历史证据。
 
 ## 环境
 
@@ -13,6 +13,24 @@
 - Android SDK `37`、NDK `27.2.12479018`、JDK `25.0.4.1`；Android arm64 release 目标为 minSdk `31` / targetSdk `37`。
 - ADB 真机：OPPO `OPD2513`，Android `16` / API `36`，ABI `arm64-v8a`。
 - 本轮设备系统 WebView：`com.google.android.webview`，`138.0.7204.179`，物理密度 `420` / DPR `2.625`。
+
+## 2026-10-18 文档状态复核
+
+本轮只核对文档与当前代码 / 交付物是否一致，并复跑本机自动检查；不新增平台、真机或真实服务验收。
+
+| 检查                                 | 实际结果                                                            |
+| ------------------------------------ | ------------------------------------------------------------------- |
+| `npm run check`                      | **97 / 97 Vitest 通过**；ESLint、严格 TypeScript、Vite 生产构建通过 |
+| `npm run test:e2e`                   | **19 / 19 生产 Edge 流程通过**，耗时约 1.2 分钟                     |
+| `cargo test --locked`                | **37 通过，0 失败，2 项按设计忽略**                                 |
+| `cargo fmt --check` / `cargo clippy` | 通过；clippy 使用 `--all-targets -- -D warnings`                    |
+| Python 桥接测试                      | **11 / 11 通过**；聊天 API 为测试替身，不代表真实 AstrBot           |
+
+两项被忽略的 Rust 测试仍分别是需要本地样本的 EPUB 登记测试，以及需要独立 Python MCP SDK 的互操作测试。浏览器流程使用生产构建与本机 `1430` 端口，模型服务为协议替身。
+
+文档修正：README 的 foliate-js 补丁组数由四组改为五组；Android 最新交付统一标注为 alpha.11，并说明 alpha.12–alpha.14 未重建 APK；补充书内搜索、AstrBot 能力、`integrations/` 与 `scripts/` 代码地图及 clippy / 桥接测试命令；修正“尚未完成”中过期的 alpha.8 APK 与 MCP 表述。CHANGELOG 补齐 alpha.2–alpha.14；AGENTS.md 的凭据规则改为平台安全存储；原生阅读核心、原生核心计划与 DeepSeek 记录补充当前版本、私有 MCP 中继和外部后端状态。
+
+运行代码、alpha.14 Windows EXE / NSIS、alpha.11 APK 与 AstrBot 远程部署均未改动；未执行安装器，未调用真实模型或 AstrBot，也未新增凭据、书籍或用户数据。
 
 ## alpha.14：工具额度反馈与异常结束后的同对话续问（2026-10-17）
 
@@ -473,6 +491,6 @@ alpha.2 历史 NSIS 开发包：`src-tauri/target/release/bundle/nsis/ReadWeave_
 
 ## 尚无运行证据
 
-Android 连续触摸选区、旋转、软键盘与面板组合的完整验收；两个真实模型服务与原生完整商业模型工具循环；ReadWeave 对 AstrBot 的实际外部适配器 / Connector / MCP / 可信调用身份与公网 HTTPS / Android 双向链路；后续 Hermes / ACP 适配；FTS5 与索引完成度；完整复合 Locator；真实获许可历史与技术书的问题集；连续一周自用与复杂书籍性能。AstrBot 独立 API 预检、APK 启动及 Android / Windows 本机密钥存储、重启和删除已有上文所列证据。
+Android 连续触摸选区、旋转、软键盘与面板组合的完整验收；两个真实模型服务与原生完整商业模型工具循环；AstrBot 真实部署上的额度终止后续问、断线 / 重连、换书 / 范围、跨设备隔离与公网 HTTPS / Android 双向链路；后续 Hermes / ACP 适配；FTS5 与索引完成度；完整复合 Locator；真实获许可历史与技术书的问题集；连续一周自用与复杂书籍性能。AstrBot 独立 API 预检、真实 Bot / 工具 / 引用的基本闭环、APK 启动及 Android / Windows 本机密钥存储、重启和删除已有上文所列证据。
 
 本机测试服务验证的是协议与应用行为，不能证明真实商业模型的解释质量、服务兼容或外部 Harness 能力。原创文本 EPUB 也不能替代扫描 PDF 或图片公式样本。
