@@ -126,19 +126,52 @@ function request(tools: ReadingTask, overrides: Partial<PrepareRun> = {}): Prepa
 }
 
 describe('host task runtime', () => {
-  it('releases a failed external session so retry cannot reuse a revoked task', async () => {
+  it('keeps failed external history visible and restores it with a fresh grant on the next explicit question', async () => {
     const f = fixture()
     f.backend.adapter.capabilities.external = true
     const tools = task()
-    await f.runtime.prepare(request(tools))
+    const replacement = task()
+    replacement.snapshot.initial[0].citationId = 'cite_new'
+    const createTask = vi.fn().mockResolvedValueOnce(tools).mockResolvedValueOnce(replacement)
+    await f.runtime.prepare(request(tools, { createTask }))
+    const first = f.backend.runs[0]
+    const conversationId = f.runtime.getSnapshot().conversation!.id
+    first.emit({ type: 'text', delta: '上限触发前的回答 [[cite_1]]' })
     f.backend.runs[0].finished.reject(new Error('external failed'))
     await vi.waitFor(() => expect(f.runtime.getSnapshot().phase).toBe('idle'))
     expect(tools.revoke).toHaveBeenCalled()
-    const replacement = task()
+    expect(first.request.signal.aborted).toBe(true)
+    expect(f.runtime.getSnapshot().conversation).toMatchObject({
+      id: conversationId,
+      messages: [{ role: 'user' }, { content: '上限触发前的回答 [[cite_1]]', status: 'error' }],
+    })
     const input = request(replacement)
     await f.runtime.prepare(input)
-    expect(input.createTask).toHaveBeenCalled()
-    expect(f.backend.runs[1].request.tools).toBe(replacement)
+    const second = f.backend.runs[1]
+    expect(input.createTask).not.toHaveBeenCalled()
+    expect(createTask).toHaveBeenCalledTimes(2)
+    expect(second.request.tools).toBe(replacement)
+    expect(second.request.history.at(-1)).toMatchObject({
+      content: '上限触发前的回答 [[cite_1]]',
+      status: 'error',
+    })
+    expect(second.request.priorEvidence?.map((fragment) => fragment.citationId)).toEqual([
+      'cite_1',
+      'cite_new',
+    ])
+    expect(second.request.sessionRef).not.toBe(first.request.sessionRef)
+    expect(f.runtime.getSnapshot().conversation!.id).toBe(conversationId)
+    expect(f.runtime.getSnapshot().conversation!.messages).toHaveLength(4)
+    first.emit({ type: 'text', delta: '迟到的旧内容' })
+    second.emit({ type: 'text', delta: '继续回答' })
+    second.emit({ type: 'done' })
+    await f.runtime.flush()
+    expect(f.saved.at(-1)?.messages.map((message) => message.content)).toEqual([
+      '为什么？',
+      '上限触发前的回答 [[cite_1]]',
+      '为什么？',
+      '继续回答',
+    ])
   })
   it('runs an external harness without a local provider and closes after revoking authority', async () => {
     const f = fixture()
@@ -355,6 +388,29 @@ describe('host task runtime', () => {
       'cite_3',
     ])
     f.runtime.reset()
+  })
+
+  it('keeps continuation after a temporary grant-creation failure without replaying a question', async () => {
+    const f = fixture()
+    const original = task()
+    const replacement = task()
+    const createTask = vi
+      .fn()
+      .mockResolvedValueOnce(original)
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce(replacement)
+    await f.runtime.prepare(request(original, { createTask }))
+    f.backend.runs[0].emit({ type: 'text', delta: '先前的部分解释' })
+    f.runtime.stop()
+    const id = f.runtime.getSnapshot().conversation!.id
+    await f.runtime.prepare(request(replacement))
+    expect(f.backend.runs).toHaveLength(1)
+    expect(f.runtime.getSnapshot().conversation!.id).toBe(id)
+    await f.runtime.prepare(request(replacement))
+    expect(f.backend.runs[1].request.history.at(-1)?.content).toBe('先前的部分解释')
+    expect(f.runtime.getSnapshot().conversation!.id).toBe(id)
+    f.runtime.cancel()
+    await f.runtime.flush()
   })
 
   it.each(['reused grant', 'changed position'])(

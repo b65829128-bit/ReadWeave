@@ -49,6 +49,26 @@ const server = createServer(async (request, response) => {
     return
   }
   const tool = body.messages.find((message) => message.role === 'tool')
+  if (question.includes('工具上限测试')) {
+    const used = body.messages.filter((message) => message.role === 'tool').length
+    if (!used) {
+      const context = JSON.parse(body.messages[1].content!.split('\n').slice(1).join('\n'))
+      write({ content: `达到上限前已有的解释 [[${context.sources.at(-1).citationId}]]。` })
+    }
+    write({
+      tool_calls: [
+        {
+          index: 0,
+          id: `budget_${used}`,
+          type: 'function',
+          function: { name: 'book_search', arguments: '{"query":"理解"}' },
+        },
+      ],
+    })
+    response.write('data: [DONE]\n\n')
+    response.end()
+    return
+  }
   if (!tool && !question.includes('追问')) {
     write({
       tool_calls: [
@@ -380,6 +400,49 @@ test('switching books during a stream archives the cancelled run and starts a se
   await page.getByRole('button', { name: '阅读笔记', exact: true }).click()
   await page.getByRole('button', { name: /阅读问答/ }).click()
   await expect(page.locator('.conversation-card')).toHaveCount(2)
+})
+
+test('tool-limit failure keeps visible history and citations when the reader asks again', async ({
+  page,
+}) => {
+  const before = requests.length
+  await page.goto('/')
+  await page.getByRole('button', { name: '开始阅读' }).click()
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  await configureFixture(page)
+  const question = page.getByRole('textbox', { name: '向阅读伙伴提问' })
+  await question.fill('工具上限测试：反复请求读取')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await page.getByRole('button', { name: '允许此书会话发送' }).click()
+  await expect(page.getByText('此次回答未完成，已有内容已保留。可以继续追问。')).toBeVisible()
+  await expect(page.locator('.message-assistant')).toHaveCount(1)
+  await expect(page.locator('.answer-markdown')).toContainText('达到上限前已有的解释')
+  const first = JSON.parse(requests[before].messages[1].content!.split('\n').slice(1).join('\n'))
+  await question.fill('追问：刚才的解释是什么？')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await expect(page.locator('.message-assistant')).toHaveCount(2)
+  await expect(page.locator('.answer-markdown').first()).toContainText('达到上限前已有的解释')
+  await expect(page.locator('.answer-markdown').last()).toContainText('这是把疑问贴近原文的练习。')
+  await expect(page.getByRole('button', { name: '停止回答' })).toHaveCount(0)
+  const next = requests.at(-1)!
+  expect(JSON.parse(next.messages[1].content!.split('\n').slice(1).join('\n')).snapshotId).not.toBe(
+    first.snapshotId,
+  )
+  expect(
+    next.messages.some(
+      (message) => message.role === 'assistant' && message.content?.includes('以下回答异常结束'),
+    ),
+  ).toBe(true)
+  expect(next.messages.some((message) => message.role === 'tool')).toBe(false)
+  await page.getByRole('button', { name: '原文', exact: true }).first().click()
+  await page.getByRole('button', { name: '定位原文' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.getByRole('button', { name: '返回书架' }).click()
+  await page.getByRole('button', { name: '阅读笔记', exact: true }).click()
+  await page.getByRole('button', { name: /阅读问答/ }).click()
+  await expect(page.locator('.conversation-card')).toHaveCount(1)
+  await page.locator('.conversation-card').click()
+  await expect(page.getByRole('dialog').locator('.archived-messages > div')).toHaveCount(4)
 })
 
 test('disabling the assistant stops its stream, survives reload, and requires new consent after re-enabling', async ({

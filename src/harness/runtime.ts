@@ -134,7 +134,7 @@ export class TaskRuntime {
         JSON.stringify(candidate.settings) === JSON.stringify(settings) &&
         candidate.apiKey === apiKey
       const resuming = matches(this.continuation) ? this.continuation : null
-      this.continuation = null
+      if (!resuming) this.continuation = null
       let factory = createTask
       let inheritedEvidence: Fragment[] = []
       let priorTasks: ReadingTask[] = []
@@ -192,6 +192,7 @@ export class TaskRuntime {
         inheritedEvidence,
         priorTasks,
       }
+      this.continuation = null
       const prepared = {
         ...this.session,
         question,
@@ -355,8 +356,10 @@ export class TaskRuntime {
       if (this.active === run) throw new Error('回答未收到完成标记，以上内容可能不完整。')
     } catch (error) {
       if (this.active !== run) return
+      this.continuation = this.session ?? run.context
+      run.controller.abort()
+      this.releaseSession()
       this.finish(run, 'error')
-      if (run.context.harness.capabilities.external) this.releaseSession()
       this.persistence.onError(
         error instanceof TypeError
           ? new Error(
@@ -381,9 +384,10 @@ export class TaskRuntime {
       event.sequence !== run.sequence + 1 ||
       !/^[a-zA-Z0-9_-]{1,160}$/.test(event.eventId)
     ) {
-      this.finish(run, 'error')
+      this.continuation = this.session ?? run.context
       run.controller.abort()
       this.releaseSession()
+      this.finish(run, 'error')
       this.persistence.onError(new Error('回答事件顺序中断，以上内容可能不完整，请重新提问。'))
       return
     }

@@ -150,7 +150,9 @@ export function AssistantPanel(props: Props) {
                         <p className="small muted">已停止，以上内容可能不完整。</p>
                       )}
                       {message.status === 'error' && (
-                        <p className="small form-error">此次回答未完成。可以重新发起问题。</p>
+                        <p className="small form-error">
+                          此次回答未完成，已有内容已保留。可以继续追问。
+                        </p>
                       )}
                       {message.content && message.status && (
                         <button

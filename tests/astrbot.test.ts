@@ -3,6 +3,9 @@ import type { ReadingTask } from '../src/core/reading-service'
 import { defaultModel } from '../src/core/types'
 import { astrbotEndpoint, createAstrbotHarness } from '../src/harness/astrbot'
 import type { HarnessAdapter, RunEvent } from '../src/harness/contracts'
+import type { ProviderAdapter } from '../src/harness/contracts'
+import { AdapterRegistry } from '../src/harness/registry'
+import { TaskRuntime } from '../src/harness/runtime'
 
 const native = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -52,12 +55,6 @@ beforeEach(() => {
 describe('AstrBot adapter', () => {
   it('bounds external tool activity and rejects malformed display data before dispatch', async () => {
     for (const frames of [
-      Array.from({ length: 7 }, (_, index) => ({
-        jsonrpc: '2.0',
-        id: index,
-        method: 'tools/call',
-        params: { name: 'book_search', arguments: { query: 'x' } },
-      })),
       [{ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: { forged: true } } }],
     ]) {
       native.invoke.mockClear()
@@ -80,6 +77,132 @@ describe('AstrBot adapter', () => {
       expect(events.filter((event) => event.type === 'tool').length).toBeLessThanOrEqual(6)
       expect(input.tools.revoke).toHaveBeenCalled()
     }
+  })
+  it.each([7, 9])(
+    'denies additional reading without raising the six-call grant, and bounds %i requests',
+    async (count) => {
+      const input = request()
+      let polls = 0
+      const forwarded: Record<string, unknown>[] = []
+      const replies: { id: number; result: { isError?: boolean; content: { text: string }[] } }[] =
+        []
+      native.invoke.mockImplementation(async (command, args) => {
+        if (command === 'reading_mcp_open') return 'peer_1'
+        if (command === 'reading_mcp_send') {
+          forwarded.push(...args.frames)
+          for (const frame of args.frames)
+            native.channel?.onmessage?.({
+              jsonrpc: '2.0',
+              id: frame.id,
+              result: { content: [{ type: 'text', text: '{"fragments":[]}' }] },
+            })
+        }
+        if (command !== 'astrbot_request') return
+        if (args.action === 'open') return { topic: 'topic_1', version: '4.27.4' }
+        if (args.action === 'mcp') replies.push(...args.body.frames)
+        if (args.action === 'poll') {
+          const index = polls++
+          return {
+            ready: true,
+            runId: 'run_1',
+            frames:
+              index > 0 && index <= count
+                ? [
+                    {
+                      jsonrpc: '2.0',
+                      id: index,
+                      method: 'tools/call',
+                      params: { name: 'book_search', arguments: { query: 'x' } },
+                    },
+                  ]
+                : [],
+            events:
+              index > count
+                ? [
+                    { type: 'text', delta: '根据已有资料回答。', sequence: 1 },
+                    { type: 'done', sequence: 2 },
+                  ]
+                : [],
+          }
+        }
+        return { ok: true }
+      })
+      const events: RunEvent[] = []
+      const adapter = createAstrbotHarness()
+      const run = adapter.submit(input, (event) => events.push(event))
+      if (count === 7) {
+        await expect(run).resolves.toBeUndefined()
+        expect(
+          events.some((event) => event.type === 'text' && event.delta === '根据已有资料回答。'),
+        ).toBe(true)
+        expect(events.at(-1)?.type).toBe('done')
+      } else await expect(run).rejects.toThrow('历史已保留，可以继续追问')
+      expect(forwarded).toHaveLength(6)
+      expect(replies.filter((reply) => reply.result.isError)).toHaveLength(Math.min(count - 6, 2))
+      const denial = JSON.parse(
+        replies.find((reply) => reply.result.isError)!.result.content[0].text,
+      )
+      expect(denial).toMatchObject({ code: 'BUDGET_EXCEEDED', retryable: false })
+      expect(denial.message).toContain('已经提供的原文和对话')
+      expect(events.filter((event) => event.type === 'tool').at(-1)).toMatchObject({
+        tool: { status: 'error', summary: expect.stringContaining('额度已用尽') },
+      })
+      await adapter.closeSession!(input.sessionRef)
+    },
+  )
+  it('recognizes native character-budget exhaustion, forwards its denial and avoids further native reads', async () => {
+    const input = request()
+    let polls = 0
+    let forwarded = 0
+    const replies: unknown[] = []
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === 'reading_mcp_open') return 'peer_1'
+      if (command === 'reading_mcp_send') {
+        forwarded += args.frames.length
+        for (const frame of args.frames)
+          native.channel?.onmessage?.({
+            jsonrpc: '2.0',
+            id: frame.id,
+            result: {
+              isError: true,
+              content: [
+                { type: 'text', text: '{"code":"BUDGET_EXCEEDED","message":"原生输出预算用尽"}' },
+              ],
+            },
+          })
+      }
+      if (command !== 'astrbot_request') return
+      if (args.action === 'open') return { topic: 'topic_1', version: '4.27.4' }
+      if (args.action === 'mcp') replies.push(...args.body.frames)
+      if (args.action === 'poll') {
+        await Promise.resolve()
+        const index = polls++
+        return {
+          ready: true,
+          runId: 'run_1',
+          frames:
+            index > 0 && index < 3
+              ? [
+                  {
+                    jsonrpc: '2.0',
+                    id: index,
+                    method: 'tools/call',
+                    params: { name: 'book_search', arguments: { query: 'x' } },
+                  },
+                ]
+              : [],
+          events: index >= 3 ? [{ type: 'done', sequence: 1 }] : [],
+        }
+      }
+      return { ok: true }
+    })
+    const adapter = createAstrbotHarness()
+    await adapter.submit(input, () => {})
+    expect(forwarded).toBe(1)
+    expect(JSON.stringify(replies)).toContain('原生输出预算用尽')
+    expect(JSON.stringify(replies)).toContain('remainingCalls')
+    expect(JSON.stringify(replies)).toContain('retryable')
+    await adapter.closeSession!(input.sessionRef)
   })
   it('uses an explicit external key, routes MCP to native authority, and only saves native evidence', async () => {
     const input = request()
@@ -300,5 +423,150 @@ describe('AstrBot adapter', () => {
       .map(([, args]) => args.action)
     expect(actions).toEqual(['open', 'poll', 'close'])
     expect(input.tools.revoke).toHaveBeenCalled()
+  })
+  it('keeps the real adapter failure in the same host conversation and sends visible history to its replacement', async () => {
+    const first = request()
+    Object.assign(first.tools.snapshot, {
+      id: 'snapshot_1',
+      bookId: 'a'.repeat(64),
+      bookVersion: `sha256:${'a'.repeat(64)}`,
+      bookTitle: '测试书',
+      chapter: '第一章',
+      scope: 'to-position',
+      selection: '设备签发的原文',
+      createdAt: new Date().toISOString(),
+      locator: {
+        cfi: 'epubcfi(/6/2!/4/2)',
+        sectionIndex: 0,
+        paragraphId: 'p_0_0',
+        endOffset: 8,
+        progress: 0,
+      },
+    })
+    const second: ReadingTask = {
+      ...first.tools,
+      runId: 'grant_2',
+      snapshot: { ...first.tools.snapshot, id: 'snapshot_2' },
+    }
+    const createTask = vi.fn().mockResolvedValueOnce(first.tools).mockResolvedValueOnce(second)
+    const harnesses = new AdapterRegistry<HarnessAdapter>('阅读伙伴')
+    const adapter = createAstrbotHarness()
+    harnesses.register(adapter)
+    harnesses.select(adapter.id)
+    const onError = vi.fn()
+    const save = vi.fn(async () => {})
+    const runtime = new TaskRuntime(harnesses, new AdapterRegistry<ProviderAdapter>('模型连接'), {
+      save,
+      onError,
+    })
+    let attempt = 0
+    let runId = ''
+    let polls = 0
+    let finished = true
+    const prompts: string[] = []
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === 'reading_mcp_open') return `peer_${attempt + 1}`
+      if (command === 'reading_mcp_send')
+        for (const frame of args.frames)
+          native.channel?.onmessage?.({
+            jsonrpc: '2.0',
+            id: frame.id,
+            result: { content: [{ type: 'text', text: '{"fragments":[]}' }] },
+          })
+      if (command !== 'astrbot_request') return
+      if (args.action === 'open') {
+        runId = ''
+        return { topic: `topic_${attempt + 1}`, version: '4.27.4' }
+      }
+      if (args.action === 'start') {
+        attempt++
+        runId = args.body.runId
+        prompts.push(args.body.prompt)
+        polls = 0
+        finished = false
+      }
+      if (args.action === 'poll') {
+        if (!runId || finished) return { ready: true, runId: runId || null, frames: [], events: [] }
+        if (attempt !== 2) {
+          finished = true
+          return {
+            ready: true,
+            runId,
+            frames: [],
+            events: [
+              {
+                type: 'text',
+                delta: attempt === 1 ? '第一轮已完成的解释 [[cite_1]]' : '接着解释。',
+                sequence: 1,
+              },
+              { type: 'done', sequence: 2 },
+            ],
+          }
+        }
+        const index = ++polls
+        return {
+          ready: true,
+          runId,
+          frames: [
+            {
+              jsonrpc: '2.0',
+              id: index,
+              method: 'tools/call',
+              params: { name: 'book_search', arguments: { query: 'x' } },
+            },
+          ],
+          events:
+            index === 1
+              ? [{ type: 'text', delta: '先前已显示的回答 [[cite_1]]', sequence: 1 }]
+              : [],
+        }
+      }
+      return { ok: true }
+    })
+    const input = {
+      bookId: first.tools.snapshot.bookId,
+      bookVersion: first.tools.snapshot.bookVersion,
+      scope: first.tools.snapshot.scope,
+      question: '原问题',
+      settings: first.settings,
+      apiKey: first.apiKey,
+      createTask,
+      isApproved: () => true,
+    }
+    await runtime.prepare(input)
+    const id = runtime.getSnapshot().conversation!.id
+    await vi.waitFor(() =>
+      expect(runtime.getSnapshot().conversation?.messages.at(-1)?.status).toBe('done'),
+    )
+    await runtime.prepare({ ...input, question: '请详细展开' })
+    await vi.waitFor(() => expect(onError).toHaveBeenCalled())
+    expect(onError.mock.calls[0][0]).toMatchObject({
+      message: expect.stringContaining('Bot 仍在重复请求'),
+    })
+    expect(runtime.getSnapshot().conversation?.messages.at(-1)).toMatchObject({
+      status: 'error',
+      content: '先前已显示的回答 [[cite_1]]',
+    })
+    await runtime.prepare({ ...input, question: '接着刚才的解释' })
+    await vi.waitFor(() =>
+      expect(runtime.getSnapshot().conversation?.messages.at(-1)?.status).toBe('done'),
+    )
+    expect(runtime.getSnapshot().conversation!.id).toBe(id)
+    expect(runtime.getSnapshot().conversation!.messages.map((message) => message.content)).toEqual([
+      '原问题',
+      '第一轮已完成的解释 [[cite_1]]',
+      '请详细展开',
+      '先前已显示的回答 [[cite_1]]',
+      '接着刚才的解释',
+      '接着解释。',
+    ])
+    expect(prompts[2]).toContain('第一轮已完成的解释 [[cite_1]]')
+    expect(prompts[2]).toContain('先前已显示的回答 [[cite_1]]')
+    expect(prompts[2]).toContain('incomplete')
+    expect(prompts[2]).toContain('设备签发的原文')
+    expect(createTask).toHaveBeenCalledTimes(2)
+    await runtime.flush()
+    expect(save).toHaveBeenCalledTimes(3)
+    runtime.reset()
   })
 })
