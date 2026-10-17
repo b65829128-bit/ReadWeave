@@ -1,6 +1,7 @@
 """Explicit integration test: official Python MCP client against the real Rust core."""
 
 import json
+import os
 import sys
 
 import anyio
@@ -14,12 +15,17 @@ async def main():
     writer, outgoing = anyio.create_memory_object_stream(16)
 
     async def receive():
-        while line := await anyio.to_thread.run_sync(
-            sys.stdin.buffer.readline, abandon_on_cancel=True
+        pending = b""
+        # A cancelled buffered readline can hold stdin's lock during Python shutdown.
+        while chunk := await anyio.to_thread.run_sync(
+            os.read, sys.stdin.fileno(), 64 * 1024, abandon_on_cancel=True
         ):
-            await incoming.send(
-                SessionMessage(JSONRPCMessage.model_validate_json(line))
-            )
+            pending += chunk
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                await incoming.send(
+                    SessionMessage(JSONRPCMessage.model_validate_json(line))
+                )
 
     async def send():
         async for message in outgoing:
