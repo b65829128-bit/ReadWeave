@@ -4,7 +4,7 @@
 
 ReadWeave 是一个本地优先的开放 EPUB 阅读器，正式目标为 **Windows 11 与 Android 平板**。原始设计方案已完整保留在 [产品方案 v0.3](docs/product-plan-v0.3.zh-CN.md)。
 
-当前为 `0.1.0-alpha.11`，处于 **P0 技术验证中**，已经具备可试用的阅读与问答原型，原生阅读核心和内置问答的统一任务入口已经接入。它还没有达到原方案的 v0.1 发布验收标准。
+当前为 `0.1.0-alpha.12`，处于 **P0 技术验证中**，已有阅读与问答原型、原生阅读核心和统一任务入口。本轮加入 AstrBot v4.27.4 适配器与桥接插件，本机协议测试通过，服务器安装后的真实 Agent 联调仍待验收。它还没有达到原方案的 v0.1 发布验收标准。
 
 ## 现在可以体验
 
@@ -48,10 +48,12 @@ npm run desktop:build
 
 ```text
 src-tauri/target/release/readweave.exe
-src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.11_x64-setup.exe
+src-tauri/target/release/bundle/nsis/ReadWeave_0.1.0-alpha.12_x64-setup.exe
 ```
 
-Android arm64 alpha.11 测试 APK 位于 `.local/ReadWeave-alpha.11.apk`，Windows 直接运行包位于 `.local/ReadWeave-alpha.11.exe`。本轮已在 Android 16 / WebView 138 真机复现并修正慢滑失效、原生选区手柄导致半页偏移和键盘遮挡；诊断副本验证整页边界及横竖屏键盘，正式 APK 已安装并检查书架和键盘界面。真实模型引用和长时间阅读仍待继续验收。APK 使用 Android Debug 开发证书，release 应用调试已关闭。文件校验值和实际范围见 [验证记录](docs/validation.md)。
+本轮 Windows alpha.12 直接运行包为 `.local/ReadWeave-alpha.12.exe`，安装包为 `.local/ReadWeave-alpha.12-setup.exe`，AstrBot 插件为 `.local/astrbot/astrbot_plugin_readweave-0.1.0.zip`。固定文件清单可用 `node scripts/package-astrbot.mjs` 重建插件。真实远程链路尚待安装后的验收。
+
+Android 当前已验证的测试 APK 仍为 `.local/ReadWeave-alpha.11.apk`。alpha.11 曾在 Android 16 / WebView 138 真机复现并修正慢滑失效、原生选区手柄导致半页偏移和键盘遮挡；诊断副本验证整页边界及横竖屏键盘，正式 APK 已安装并检查书架和键盘界面。真实模型引用和长时间阅读仍待继续验收。APK 使用 Android Debug 开发证书，release 应用调试已关闭。文件校验值和实际范围见 [验证记录](docs/validation.md)。
 
 Windows 包是未签名的开发预览包。实际验收范围见 [验证记录](docs/validation.md)，不能将成功打包等同于完整平台验收。
 
@@ -64,6 +66,8 @@ alpha.6 已处理该书导入和打开时的主要耗时；随后用户日常双
 首次升级旧数据库前会在数据库旁生成一致性 SQLite 备份，保留书籍、标注、问答与进度。迁移范围、回滚方式及来源校验边界见 [原生阅读核心](docs/native-reading-core.md)。
 
 ## 配置阅读伙伴
+
+AstrBot 接入：在设置中选择「AstrBot v4.27.4 · 内置 Agent」，使用服务器上已有的模型配置；先安装仓库内的 ReadWeave 桥接插件并将本机 `16186` 转发至服务器回环端口 `6186`。API Key 只需 `chat` 权限，单独留在运行内存，不复用或改写内置模型的系统凭据。安装、测试和数据边界见 [插件说明](integrations/astrbot/astrbot_plugin_readweave/README.md) 与 [接入记录](docs/astrbot-integration.md)。此路径需要原生客户端，浏览器预览只能编辑设置；Android / 公网 HTTPS 尚未验收。
 
 在“设置 → 模型连接”输入服务地址、模型名称和自己的密钥。服务地址可填 `https://你的服务/v1`；程序补全 `/chat/completions`。服务需要支持 SSE 流式响应和 function tools。
 
@@ -79,7 +83,7 @@ Windows 原生客户端使用 Windows 凭据管理器，Android 使用由 Androi
 
 首次在一台设备保存密钥后，后续启动不需要重新填写。安全凭据按设备保存，不随备份恢复，也不会同步到其他设备；请在每台设备分别配置。
 
-未连接模型时不会生成解释，不会将示例文字伪装成 AI 回答。划线本身不会发送资料。联网搜索和外部 Harness 目前没有启用。
+未连接模型时不会生成解释，不会将示例文字伪装成 AI 回答。划线本身不会发送资料。ReadWeave 自身的联网搜索没有启用；AstrBot 上其他插件的行为与资料可见范围由服务器配置决定。
 
 ## 在书内操作
 
