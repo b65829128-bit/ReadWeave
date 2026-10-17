@@ -17,8 +17,11 @@ type Session = Backend & {
   settings: ModelSettings
   apiKey: string
   sessionRef: string
+  createTask: PrepareRun['createTask']
+  inheritedEvidence: Fragment[]
+  priorTasks: ReadingTask[]
 }
-type PreparedRun = Session & { question: string }
+type PreparedRun = Session & { question: string; resumeConversationId?: string }
 type Execution = {
   id: string
   sessionRef: string
@@ -59,6 +62,7 @@ export class TaskRuntime {
   private preparation: { controller: AbortController; backend: Backend } | null = null
   private preview: PreparedRun | null = null
   private session: Session | null = null
+  private continuation: Session | null = null
   private active: Execution | null = null
   private revoked = new WeakSet<ReadingTask>()
   private saveTails = new Map<string, Promise<void>>()
@@ -120,20 +124,33 @@ export class TaskRuntime {
       this.preparation = { controller, backend }
       this.update({ phase: 'preparing', pending: null, status: '' })
       const previous = this.session
-      if (
-        previous &&
-        this.isCurrent(previous) &&
-        previous.tools.snapshot.bookId === bookId &&
-        previous.tools.snapshot.bookVersion === bookVersion &&
-        previous.tools.snapshot.scope === scope &&
-        previous.tools.snapshot.id === this.state.conversation?.snapshot.id &&
-        JSON.stringify(previous.settings) === JSON.stringify(settings) &&
-        previous.apiKey === apiKey
-      ) {
+      const matches = (candidate: Session | null): candidate is Session =>
+        !!candidate &&
+        this.isCurrent(candidate) &&
+        candidate.tools.snapshot.bookId === bookId &&
+        candidate.tools.snapshot.bookVersion === bookVersion &&
+        candidate.tools.snapshot.scope === scope &&
+        candidate.tools.snapshot.id === this.state.conversation?.snapshot.id &&
+        JSON.stringify(candidate.settings) === JSON.stringify(settings) &&
+        candidate.apiKey === apiKey
+      const resuming = matches(this.continuation) ? this.continuation : null
+      this.continuation = null
+      let factory = createTask
+      let inheritedEvidence: Fragment[] = []
+      let priorTasks: ReadingTask[] = []
+      if (matches(previous)) {
         tools = previous.tools
+        factory = previous.createTask
+        inheritedEvidence = previous.inheritedEvidence
+        priorTasks = previous.priorTasks
       } else {
         this.releaseSession()
-        tools = await createTask(controller.signal)
+        factory = resuming?.createTask ?? createTask
+        inheritedEvidence = resuming ? structuredClone(this.state.conversation!.evidence) : []
+        priorTasks = resuming ? [...resuming.priorTasks, resuming.tools] : []
+        if (resuming) await resuming.tools.revoke()
+        if (controller.signal.aborted || this.preparation?.controller !== controller) return
+        tools = await factory(controller.signal)
       }
       if (controller.signal.aborted || this.preparation?.controller !== controller) {
         this.release(tools)
@@ -145,9 +162,41 @@ export class TaskRuntime {
         tools.snapshot.scope !== scope
       )
         throw new Error('阅读任务与当前书籍版本或授权范围不一致。')
+      if (resuming) {
+        if (
+          tools === resuming.tools ||
+          tools.runId === resuming.tools.runId ||
+          tools.snapshot.id === resuming.tools.snapshot.id
+        )
+          throw new Error('继续对话需要重新建立读取授权，请开始新话题。')
+        const original = resuming.tools.snapshot
+        if (
+          tools.snapshot.locator.cfi !== original.locator.cfi ||
+          tools.snapshot.locator.paragraphId !== original.locator.paragraphId ||
+          tools.snapshot.locator.sectionIndex !== original.locator.sectionIndex ||
+          tools.snapshot.locator.endOffset !== original.locator.endOffset ||
+          tools.snapshot.selection !== original.selection ||
+          tools.snapshot.contentHash !== original.contentHash ||
+          tools.snapshot.transformVersion !== original.transformVersion
+        )
+          throw new Error('继续对话的阅读边界发生变化，请开始新话题。')
+      }
       const sessionRef = previous?.tools === tools ? previous.sessionRef : crypto.randomUUID()
-      this.session = { ...backend, tools, settings, apiKey, sessionRef }
-      const prepared = { ...this.session, question }
+      this.session = {
+        ...backend,
+        tools,
+        settings,
+        apiKey,
+        sessionRef,
+        createTask: factory,
+        inheritedEvidence,
+        priorTasks,
+      }
+      const prepared = {
+        ...this.session,
+        question,
+        ...(resuming ? { resumeConversationId: this.state.conversation!.id } : {}),
+      }
       const approved = isApproved(tools.snapshot)
       this.preparation = null
       if (approved) this.begin(prepared)
@@ -182,7 +231,12 @@ export class TaskRuntime {
     this.begin(prepared)
   }
 
-  cancel() {
+  stop() {
+    this.cancel(true)
+  }
+
+  cancel(continueConversation = false) {
+    this.continuation = continueConversation && this.active ? this.session : null
     const preparation = this.preparation
     this.preparation = null
     preparation?.controller.abort()
@@ -214,21 +268,40 @@ export class TaskRuntime {
     bookVersion: string,
     fragment: Fragment,
   ): Promise<Locator | null> {
-    const task = this.session?.tools
-    return task?.snapshot.bookId === bookId && task.snapshot.bookVersion === bookVersion
-      ? task.resolveAnchor(fragment)
-      : null
+    const session = this.session ?? this.continuation
+    if (
+      !session ||
+      session.tools.snapshot.bookId !== bookId ||
+      session.tools.snapshot.bookVersion !== bookVersion
+    )
+      return null
+    for (const task of [session.tools, ...[...session.priorTasks].reverse()]) {
+      const locator = await task.resolveAnchor(fragment)
+      if (locator) return locator
+    }
+    return null
   }
 
   private begin(context: PreparedRun) {
     const previous =
-      this.state.conversation?.snapshot.id === context.tools.snapshot.id
+      this.state.conversation?.snapshot.id === context.tools.snapshot.id ||
+      (context.resumeConversationId && this.state.conversation?.id === context.resumeConversationId)
         ? this.state.conversation
         : null
     const id = crypto.randomUUID()
     const assistantId = crypto.randomUUID()
     const conversation: Conversation = previous
-      ? { ...previous, messages: [...previous.messages] }
+      ? {
+          ...previous,
+          snapshot: structuredClone(context.tools.snapshot),
+          messages: [...previous.messages],
+          evidence: this.evidence(context),
+          backend: {
+            harnessId: context.harness.id,
+            ...(context.provider ? { providerId: context.provider.id } : {}),
+            sessionRef: context.sessionRef,
+          },
+        }
       : {
           id: crypto.randomUUID(),
           bookId: context.tools.snapshot.bookId,
@@ -274,6 +347,7 @@ export class TaskRuntime {
           runId: run.id,
           sessionRef: run.sessionRef,
           history: run.conversation.messages.slice(0, -2),
+          priorEvidence: run.conversation.evidence,
           signal: run.controller.signal,
         },
         (event) => this.accept(run, event),
@@ -342,7 +416,7 @@ export class TaskRuntime {
         this.answer(run, (message) => ({ ...message, protocol: structuredClone(event.messages) }))
         break
       case 'evidence':
-        run.conversation = { ...run.conversation, evidence: run.context.tools.allEvidence() }
+        run.conversation = { ...run.conversation, evidence: this.evidence(run.context) }
         break
       case 'done':
         this.finish(run, 'done')
@@ -370,7 +444,7 @@ export class TaskRuntime {
           : tool,
       ),
     }))
-    run.conversation = { ...run.conversation, evidence: run.context.tools.allEvidence() }
+    run.conversation = { ...run.conversation, evidence: this.evidence(run.context) }
     this.save(run.conversation)
     this.update({ phase: 'idle', conversation: run.conversation, status: '' })
   }
@@ -382,6 +456,17 @@ export class TaskRuntime {
         message.id === run.assistantId ? transform(message) : message,
       ),
     }
+  }
+
+  private evidence(session: Session) {
+    return [
+      ...new Map(
+        [...session.inheritedEvidence, ...session.tools.allEvidence()].map((fragment) => [
+          fragment.citationId,
+          structuredClone(fragment),
+        ]),
+      ).values(),
+    ]
   }
 
   private save(conversation: Conversation) {
@@ -416,7 +501,7 @@ export class TaskRuntime {
   }
 
   private selectionChanged() {
-    const backend = this.preparation?.backend ?? this.preview ?? this.session
+    const backend = this.preparation?.backend ?? this.preview ?? this.session ?? this.continuation
     if (backend && !this.isCurrent(backend)) this.cancel()
   }
 

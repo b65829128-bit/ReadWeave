@@ -293,6 +293,59 @@ async function configureFixture(page: Page) {
   await page.getByRole('button', { name: '保存设置' }).click()
 }
 
+test('stopping keeps one conversation, its frozen reading position and earlier citations on the next question', async ({
+  page,
+}) => {
+  const before = requests.length
+  await page.goto('/')
+  await page.getByRole('button', { name: '开始阅读' }).click()
+  await expect(page.locator('.reader-loading')).toHaveCount(0)
+  await configureFixture(page)
+  const question = page.getByRole('textbox', { name: '向阅读伙伴提问' })
+  await question.fill('先解释这段原文。')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await page.getByRole('button', { name: '允许此书会话发送' }).click()
+  await expect(page.getByRole('button', { name: '停止回答' })).toHaveCount(0)
+  await expect(page.locator('.answer-markdown')).toContainText('这是把疑问贴近原文的练习。')
+  const context = (body: ApiBody) =>
+    JSON.parse(body.messages[1].content!.split('\n').slice(1).join('\n'))
+  const original = context(requests[before])
+  await question.fill('取消测试：详细展开刚才的回答。')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await expect(page.locator('.answer-markdown').last()).toContainText('第一段尚未结束。')
+  await page.getByRole('button', { name: '停止回答' }).click()
+  await expect(page.getByText('已停止，以上内容可能不完整。')).toBeVisible()
+  const stoppedText = await page.locator('.answer-markdown').last().textContent()
+  await page.getByRole('button', { name: '下一页' }).click()
+  await question.fill('追问：继续刚才的解释。')
+  await page.getByRole('button', { name: '发送问题' }).click()
+  await expect(page.getByRole('button', { name: '停止回答' })).toHaveCount(0)
+  await expect(page.locator('.message-assistant')).toHaveCount(3)
+  await expect(page.locator('.answer-markdown').last()).toContainText('这是把疑问贴近原文的练习。')
+  await expect(page.locator('.answer-markdown').nth(1)).toHaveText(stoppedText!)
+  const resumed = requests.at(-1)!
+  expect(context(resumed).snapshotId).not.toBe(original.snapshotId)
+  for (const key of ['selection', 'chapter', 'scope', 'bookVersion', 'contentHash'])
+    expect(context(resumed)[key]).toEqual(original[key])
+  expect(
+    resumed.messages.some(
+      (message) =>
+        message.role === 'assistant' && message.content?.includes('以下回答已被用户停止'),
+    ),
+  ).toBe(true)
+  await page.getByRole('button', { name: '原文', exact: true }).first().click()
+  await expect(page.getByRole('dialog')).toContainText('保存的原文片段')
+  await page.getByRole('button', { name: '定位原文' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.getByRole('button', { name: '返回书架' }).click()
+  await page.getByRole('button', { name: '阅读笔记', exact: true }).click()
+  await page.getByRole('button', { name: /阅读问答/ }).click()
+  await expect(page.locator('.conversation-card')).toHaveCount(1)
+  await page.locator('.conversation-card').click()
+  await expect(page.getByRole('dialog').locator('.archived-messages > div')).toHaveCount(6)
+  await expect(page.getByRole('dialog')).toContainText(stoppedText!)
+})
+
 test('switching books during a stream archives the cancelled run and starts a separate session', async ({
   page,
 }) => {

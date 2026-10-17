@@ -30,6 +30,7 @@ import {
   X,
 } from 'lucide-react'
 import { isTauri } from '@tauri-apps/api/core'
+import { version } from '../package.json'
 import { Library } from './components/Library'
 import { Modal } from './components/Modal'
 import { Appearance, SettingsDialog } from './components/Settings'
@@ -1196,7 +1197,7 @@ export default function App() {
                 onDraft={setDraft}
                 onSubmit={ask}
                 onAction={askAction}
-                onCancel={cancel}
+                onCancel={() => taskRuntime.stop()}
                 onNew={newTopic}
                 onClose={() => setShowAssistant(false)}
                 onSettings={() => setShowSettings(true)}
@@ -1603,8 +1604,8 @@ export default function App() {
           <Brand />
           <p>在原文旁理解，顺畅继续阅读。</p>
           <p className="muted">
-            v0.1.0-alpha.9 · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的
-            foliate-js。正式目标为 Windows 11 与 Android 平板。
+            v{version} · P0 / P1 开发原型。沿用 Tauri 2、React 和固定版本的 foliate-js。正式目标为
+            Windows 11 与 Android 平板。
           </p>
           <div className="inline-notice">
             <BookOpen size={19} />

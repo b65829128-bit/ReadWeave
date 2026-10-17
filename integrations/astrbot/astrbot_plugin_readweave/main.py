@@ -25,7 +25,7 @@ class ReadingTool(FunctionTool):
                 event.message_obj.message_id,
                 kwargs,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 -- Tool errors must not expose request data to models.
             return json.dumps(
                 {
                     "error": {
@@ -41,7 +41,7 @@ class ReadingTool(FunctionTool):
     "readweave",
     "ReadWeave",
     "ReadWeave 本机授权阅读桥接（固定 AstrBot 4.27.4）",
-    "0.1.0",
+    "0.1.1",
 )
 class ReadWeavePlugin(Star):
     def __init__(self, context: Context):

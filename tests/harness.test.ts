@@ -56,7 +56,7 @@ const stream = (deltas: ProviderDelta[]) =>
 const tool = {
   index: 0,
   id: 'search_1',
-  type: 'function',
+  type: 'function' as const,
   function: { name: 'book_search', arguments: '{"query":"理解"}' },
 }
 
@@ -143,6 +143,40 @@ describe('DeepSeek thinking and visible tool exchanges', () => {
     )
     expect(complete.mock.calls[0][0]).not.toHaveProperty('thinking')
     expect(complete.mock.calls[0][0]).not.toHaveProperty('reasoning_effort')
+  })
+  it('restores a stopped answer as incomplete visible text without unfinished tools or reasoning', async () => {
+    stream([{ content: '继续解释。' }])
+    await builtinHarness.submit(
+      {
+        ...runContext(),
+        tools: tools(),
+        question: '继续',
+        settings: defaultModel,
+        apiKey: '',
+        signal: new AbortController().signal,
+        history: [
+          { id: 'q', role: 'user', content: '原问题' },
+          {
+            id: 'a',
+            role: 'assistant',
+            status: 'cancelled',
+            content: '部分解释',
+            reasoning: '未完成推理',
+            protocol: [{ role: 'assistant', content: null, tool_calls: [tool] }],
+          },
+        ],
+      },
+      () => {},
+    )
+    const messages = complete.mock.calls[0][0].messages as CompletionMessage[]
+    expect(messages.find((message) => message.role === 'assistant')).toEqual({
+      role: 'assistant',
+      content: '（以下回答已被用户停止，内容不完整）\n部分解释',
+      reasoning_content: '',
+    })
+    expect(messages.some((message) => message.role === 'tool')).toBe(false)
+    expect(JSON.stringify(messages)).not.toContain('未完成推理')
+    expect(JSON.stringify(messages)).not.toContain('search_1')
   })
   it('stops the tool loop if cancellation happens while an asynchronous reading tool is pending', async () => {
     const task = tools()

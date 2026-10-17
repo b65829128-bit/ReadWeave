@@ -42,7 +42,13 @@ export const builtinHarness: HarnessAdapter = {
     // Keep complete tool exchanges together. Cutting individual protocol messages breaks the API.
     for (const message of history.slice(-12)) {
       if (message.role === 'user') messages.push({ role: 'user', content: message.content })
-      else if (message.status === 'done') {
+      else if (message.status === 'cancelled' && message.content) {
+        messages.push({
+          role: 'assistant',
+          content: `（以下回答已被用户停止，内容不完整）\n${message.content}`,
+          ...(deepseek ? { reasoning_content: '' } : {}),
+        })
+      } else if (message.status === 'done') {
         if (message.protocol?.length) {
           for (const item of message.protocol) {
             const copy: Record<string, unknown> = { ...item }

@@ -1,6 +1,6 @@
 name: readweave
 display_name: ReadWeave 阅读桥接
 desc: 将 AstrBot 内置 Agent 连接到 ReadWeave 的受限书内 MCP 工具
-version: v0.1.0
+version: v0.1.1
 author: ReadWeave
 repo: ''

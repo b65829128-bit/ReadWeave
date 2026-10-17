@@ -62,6 +62,7 @@ pub async fn astrbot_request(
         return Err(match response.status().as_u16() {
             401 | 403 => "ASTRBOT_KEY_REJECTED",
             409 => "ASTRBOT_SESSION_CONFLICT",
+            410 => "ASTRBOT_TOPIC_EXPIRED",
             _ => "ASTRBOT_BRIDGE_FAILED",
         }
         .into());

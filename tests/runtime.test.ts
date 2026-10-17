@@ -259,6 +259,154 @@ describe('host task runtime', () => {
     expect(f.saved[0].messages.at(-1)?.content).toBe('未完成。')
   })
 
+  it('continues a stopped conversation with fresh authority at its original frozen position and keeps citations', async () => {
+    const f = fixture()
+    f.backend.adapter.capabilities.external = true
+    const old = task()
+    const renewed = task()
+    renewed.snapshot.initial[0].citationId = 'cite_2'
+    const next = task()
+    next.snapshot.initial[0].citationId = 'cite_3'
+    const createTask = vi
+      .fn()
+      .mockResolvedValueOnce(old)
+      .mockResolvedValueOnce(renewed)
+      .mockResolvedValueOnce(next)
+    old.resolveAnchor = vi.fn(async (fragment) =>
+      fragment.citationId === 'cite_1' ? old.snapshot.locator : null,
+    )
+    await f.runtime.prepare(request(old, { createTask }))
+    const first = f.backend.runs[0]
+    const conversationId = f.runtime.getSnapshot().conversation!.id
+    first.emit({ type: 'text', delta: '未完成的解释 [[cite_1]]' })
+    const revoked = deferred()
+    old.revoke = vi.fn(() => revoked.promise)
+    const stopped = deferred()
+    f.backend.adapter.closeSession = vi.fn(() => stopped.promise)
+    f.runtime.stop()
+    await f.runtime.flush()
+    expect(old.revoke).toHaveBeenCalled()
+    expect(f.saved[0].messages.at(-1)?.status).toBe('cancelled')
+    expect(
+      await f.runtime.resolveAnchor(
+        old.snapshot.bookId,
+        old.snapshot.bookVersion,
+        old.snapshot.initial[0],
+      ),
+    ).toEqual(old.snapshot.locator)
+
+    const moved = task()
+    moved.snapshot.locator.endOffset = 50
+    const followup = request(moved, { question: '继续刚才的话。' })
+    const preparing = f.runtime.prepare(followup)
+    expect(createTask).toHaveBeenCalledOnce()
+    revoked.resolve()
+    await preparing
+    const second = f.backend.runs[1]
+    expect(followup.createTask).not.toHaveBeenCalled()
+    expect(createTask).toHaveBeenCalledTimes(2)
+    expect(second.request.tools).toBe(renewed)
+    expect(second.request.sessionRef).not.toBe(first.request.sessionRef)
+    expect(second.request.runId).not.toBe(first.request.runId)
+    expect(second.request.tools.snapshot.locator.endOffset).toBe(2)
+    expect(second.request.history.at(-1)).toMatchObject({
+      content: '未完成的解释 [[cite_1]]',
+      status: 'cancelled',
+    })
+    expect(second.request.priorEvidence?.map((fragment) => fragment.citationId)).toEqual([
+      'cite_1',
+      'cite_2',
+    ])
+    expect(f.runtime.getSnapshot().conversation?.id).toBe(conversationId)
+    expect(f.runtime.getSnapshot().conversation?.snapshot.id).toBe(renewed.snapshot.id)
+    expect(
+      await f.runtime.resolveAnchor(
+        old.snapshot.bookId,
+        old.snapshot.bookVersion,
+        old.snapshot.initial[0],
+      ),
+    ).toEqual(old.snapshot.locator)
+    first.emit({ type: 'text', delta: '迟到的旧文字' })
+    stopped.resolve()
+    first.finished.resolve()
+    await Promise.resolve()
+    expect(second.request.signal.aborted).toBe(false)
+    second.emit({ type: 'text', delta: '接着解释 [[cite_2]]' })
+    f.runtime.stop()
+    await f.runtime.prepare(request(moved, { question: '再追问。' }))
+    const third = f.backend.runs[2]
+    third.emit({ type: 'text', delta: '第三轮 [[cite_3]]' })
+    third.emit({ type: 'done' })
+    await f.runtime.flush()
+    expect(f.saved.at(-1)).toMatchObject({
+      id: conversationId,
+      messages: [
+        { role: 'user' },
+        { content: '未完成的解释 [[cite_1]]', status: 'cancelled' },
+        { role: 'user' },
+        { content: '接着解释 [[cite_2]]', status: 'cancelled' },
+        { role: 'user' },
+        { content: '第三轮 [[cite_3]]', status: 'done' },
+      ],
+    })
+    expect(f.saved.at(-1)?.evidence.map((fragment) => fragment.citationId)).toEqual([
+      'cite_1',
+      'cite_2',
+      'cite_3',
+    ])
+    f.runtime.reset()
+  })
+
+  it.each(['reused grant', 'changed position'])(
+    'rejects an unsafe continuation: %s',
+    async (kind) => {
+      const f = fixture()
+      const original = task()
+      const replacement = kind === 'reused grant' ? original : task()
+      if (kind === 'changed position') replacement.snapshot.locator.endOffset = 30
+      const createTask = vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(replacement)
+      await f.runtime.prepare(request(original, { createTask }))
+      f.runtime.stop()
+      await f.runtime.prepare(request(task()))
+      expect(f.backend.runs).toHaveLength(1)
+      expect(replacement.revoke).toHaveBeenCalled()
+      expect(f.onError).toHaveBeenCalledOnce()
+      expect(f.runtime.getSnapshot().phase).toBe('idle')
+      await f.runtime.flush()
+    },
+  )
+
+  it.each(['book', 'scope', 'settings', 'backend switch', 'new topic'])(
+    'clears paused history after changing %s',
+    async (change) => {
+      const f = fixture()
+      const original = task()
+      const createTask = vi.fn(async () => original)
+      await f.runtime.prepare(request(original, { createTask }))
+      f.backend.runs[0].emit({ type: 'text', delta: '原话题中的内容' })
+      f.runtime.stop()
+      const replacement = task(change === 'book' ? 'b' : 'a')
+      if (change === 'scope') replacement.snapshot.scope = 'chapter'
+      if (change === 'backend switch') {
+        const other = harness('other')
+        f.harnesses.register(other.adapter)
+        f.harnesses.select(other.adapter.id)
+        f.harnesses.select(f.backend.adapter.id)
+      }
+      if (change === 'new topic') f.runtime.reset()
+      const input = request(
+        replacement,
+        change === 'settings' ? { settings: { ...defaultModel, model: 'different' } } : {},
+      )
+      await f.runtime.prepare(input)
+      expect(input.createTask).toHaveBeenCalledOnce()
+      expect(createTask).toHaveBeenCalledOnce()
+      expect(f.backend.runs[1].request.history).toEqual([])
+      f.runtime.cancel()
+      await f.runtime.flush()
+    },
+  )
+
   it('revokes a late preparation after switching books and releases a dismissed preview', async () => {
     const f = fixture()
     const late = deferred<ReadingTask>()

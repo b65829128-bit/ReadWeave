@@ -203,4 +203,102 @@ describe('AstrBot adapter', () => {
     ])
       expect(() => astrbotEndpoint(value)).toThrow()
   })
+  it('reuses a healthy backend session and seeds history only when opening a replacement', async () => {
+    const adapter = createAstrbotHarness()
+    let currentRun = ''
+    let ready = false
+    let opens = 0
+    const prompts: string[] = []
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === 'reading_mcp_open') return `peer_${opens + 1}`
+      if (command !== 'astrbot_request') return
+      if (args.action === 'open') {
+        opens++
+        return { topic: `topic_${opens}`, version: '4.27.4' }
+      }
+      if (args.action === 'start') {
+        currentRun = args.body.runId
+        prompts.push(args.body.prompt)
+        ready = true
+      }
+      if (args.action === 'poll') {
+        const events = ready ? [{ type: 'done', sequence: 1 }] : []
+        ready = false
+        return { ready: true, frames: [], events, runId: currentRun || null }
+      }
+      return { ok: true }
+    })
+    const input = request()
+    await adapter.submit(input, () => {})
+    const history = [
+      {
+        id: 'a',
+        role: 'assistant' as const,
+        content: '此前的解释 [[cite_1]]',
+        status: 'done' as const,
+      },
+    ]
+    await adapter.submit({ ...input, runId: 'run_2', history }, () => {})
+    expect(opens).toBe(1)
+    expect(prompts[1]).not.toContain('先前对话')
+    await adapter.closeSession!(input.sessionRef)
+    await adapter.submit(
+      {
+        ...request(),
+        runId: 'run_3',
+        sessionRef: 'replacement',
+        history,
+        priorEvidence: input.tools.allEvidence(),
+      },
+      () => {},
+    )
+    expect(opens).toBe(2)
+    expect(prompts[2]).toContain('此前的解释 [[cite_1]]')
+    expect(prompts[2]).toContain('设备签发的原文')
+    expect(prompts[2].split('先前对话')[1]).not.toContain('anchor_1')
+    expect(prompts[2].split('先前对话')[1]).not.toContain('ref_1')
+    await adapter.closeSession!('replacement')
+  })
+
+  it('attempts remote close even after stop failure and keeps the original stop error visible', async () => {
+    const input = request()
+    const controller = new AbortController()
+    input.signal = controller.signal
+    let polls = 0
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === 'reading_mcp_open') return 'peer_1'
+      if (command !== 'astrbot_request') return
+      if (args.action === 'open') return { topic: 'topic_1', version: '4.27.4' }
+      if (args.action === 'poll') {
+        if (++polls > 1) controller.abort()
+        return { ready: true, frames: [], events: [], runId: null }
+      }
+      if (args.action === 'cancel') throw 'ASTRBOT_CONNECTION_FAILED'
+      return { ok: true }
+    })
+    const adapter = createAstrbotHarness()
+    await expect(adapter.submit(input, () => {})).rejects.toThrow('尚未确认 AstrBot 停止')
+    await expect(adapter.closeSession!(input.sessionRef)).rejects.toThrow('尚未确认 AstrBot 停止')
+    expect(
+      native.invoke.mock.calls.some(
+        ([command, args]) => command === 'astrbot_request' && args.action === 'close',
+      ),
+    ).toBe(true)
+  })
+
+  it('reports an expired topic without retrying and treats its cleanup as already complete', async () => {
+    const input = request()
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === 'reading_mcp_open') return 'peer_1'
+      if (command !== 'astrbot_request') return
+      if (args.action === 'open') return { topic: 'topic_1', version: '4.27.4' }
+      throw 'ASTRBOT_TOPIC_EXPIRED'
+    })
+    await expect(createAstrbotHarness().submit(input, () => {})).rejects.toThrow('话题已过期或断开')
+    const actions = native.invoke.mock.calls
+      .filter(([command]) => command === 'astrbot_request')
+      .map(([, args]) => args.action)
+    expect(actions).toEqual(['open', 'poll', 'close'])
+    expect(input.tools.revoke).toHaveBeenCalled()
+  })
 })

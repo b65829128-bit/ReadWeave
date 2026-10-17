@@ -8,8 +8,9 @@ import json
 import re
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import anyio
 import httpx
@@ -51,8 +52,9 @@ class ChatApi:
             return payload.get("data") or {}
 
     async def stream(self, key: str, actor: str, session: str, prompt: str):
-        async with self.client(key) as client:
-            async with client.stream(
+        async with (
+            self.client(key) as client,
+            client.stream(
                 "POST",
                 "/api/v1/chat",
                 json={
@@ -60,15 +62,16 @@ class ChatApi:
                     "session_id": session,
                     "message": prompt,
                 },
-            ) as response:
-                response.raise_for_status()
-                if "text/event-stream" not in response.headers.get("content-type", ""):
-                    raise ValueError("AstrBot did not start an event stream")
-                async for line in response.aiter_lines():
-                    if len(line.encode()) > MAX_FRAME:
-                        raise ValueError("Oversized AstrBot event")
-                    if line.startswith("data:"):
-                        yield json.loads(line[5:])
+            ) as response,
+        ):
+            response.raise_for_status()
+            if "text/event-stream" not in response.headers.get("content-type", ""):
+                raise ValueError("AstrBot did not start an event stream")
+            async for line in response.aiter_lines():
+                if len(line.encode()) > MAX_FRAME:
+                    raise ValueError("Oversized AstrBot event")
+                if line.startswith("data:"):
+                    yield json.loads(line[5:])
 
 
 @dataclass
@@ -92,6 +95,7 @@ class Topic:
     last_seen: float = field(default_factory=time.monotonic)
     ready: bool = False
     closed: bool = False
+    retired: bool = False
     run: Run | None = None
     client: ClientSession | None = None
     incoming: Any = None
@@ -102,6 +106,7 @@ class Topic:
     events: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(128))
     poll_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     tool_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    control_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class Bridge:
@@ -133,14 +138,14 @@ class Bridge:
         try:
             body = json.loads(data)
             if not isinstance(body, dict):
-                raise ValueError()
+                raise TypeError()
             actor, key_hash = await self.authenticate(key)
             return await self.dispatch(action, body, key, actor, key_hash)
         except HTTPException:
             raise
         except (ValueError, TypeError, KeyError):
             raise HTTPException(400, "Invalid bridge request") from None
-        except Exception:
+        except Exception:  # noqa: BLE001 -- Redact all upstream errors at the HTTP boundary.
             # Never return exception strings: upstream exceptions may contain request data.
             raise HTTPException(502, "Bridge operation failed") from None
 
@@ -172,12 +177,9 @@ class Bridge:
         topic = (
             self.topics.get(body["topic"]) if isinstance(body["topic"], str) else None
         )
-        if (
-            not topic
-            or topic.actor != actor
-            or topic.key_hash != key_hash
-            or topic.closed
-        ):
+        if not topic or topic.closed:
+            raise HTTPException(410, "Topic unavailable")
+        if topic.actor != actor or topic.key_hash != key_hash:
             raise HTTPException(403, "Topic unavailable")
         topic.last_seen = time.monotonic()
         if action == "poll":
@@ -215,7 +217,7 @@ class Bridge:
             for message in messages:
                 await asyncio.wait_for(topic.incoming.send(message), 5)
         elif action == "start":
-            if not topic.ready or topic.run and not topic.run.finished:
+            if topic.retired or not topic.ready or topic.run and not topic.run.finished:
                 raise HTTPException(409, "Topic is busy or not ready")
             if not isinstance(body["runId"], str) or not IDENTIFIER.fullmatch(
                 body["runId"]
@@ -238,12 +240,7 @@ class Bridge:
                 raise HTTPException(409, "Run mismatch")
             await self.cancel(topic, key)
         elif action == "close":
-            await self.cancel(topic, key)
-            # Only delete the dedicated session created by this topic.
-            await self.api.request(
-                key, "DELETE", f"/api/v1/chat/sessions/{topic.session}"
-            )
-            await self.remove(topic)
+            await self.close_topic(topic, key)
         return {"ok": True}
 
     async def connect_mcp(self, topic: Topic):
@@ -263,22 +260,26 @@ class Bridge:
                     topic.wake.set()
 
         try:
-            async with to_client, from_host, to_host:
-                async with asyncio.TaskGroup() as tasks:
-                    worker = tasks.create_task(forward())
-                    async with ClientSession(from_host, to_host) as client:
-                        topic.client = client
-                        await asyncio.wait_for(client.initialize(), 30)
-                        listed = await asyncio.wait_for(client.list_tools(), 15)
-                        if {tool.name for tool in listed.tools} != set(TOOLS.values()):
-                            raise ValueError("Unexpected reading tools")
-                        topic.ready = True
-                        topic.wake.set()
-                        await topic.stopped.wait()
-                    worker.cancel()
+            async with (
+                to_client,
+                from_host,
+                to_host,
+                asyncio.TaskGroup() as tasks,
+            ):
+                worker = tasks.create_task(forward())
+                async with ClientSession(from_host, to_host) as client:
+                    topic.client = client
+                    await asyncio.wait_for(client.initialize(), 30)
+                    listed = await asyncio.wait_for(client.list_tools(), 15)
+                    if {tool.name for tool in listed.tools} != set(TOOLS.values()):
+                        raise ValueError("Unexpected reading tools")
+                    topic.ready = True
+                    topic.wake.set()
+                    await topic.stopped.wait()
+                worker.cancel()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 -- Fail closed on any protocol worker error.
             topic.ready = False
             topic.closed = True
             topic.wake.set()
@@ -341,7 +342,7 @@ class Bridge:
                 await self.emit(topic, run, {"type": "done"})
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 -- Send a redacted failure and stop upstream execution.
             await self.emit(topic, run, {"type": "error"})
             with contextlib.suppress(Exception):
                 await self.api.request(
@@ -367,42 +368,97 @@ class Bridge:
         if run and not run.backend_id:
             await asyncio.wait_for(run.backend_ready.wait(), 3)
         if (
-            topic.closed
-            or not topic.ready
-            or not run
-            or run.finished
-            or run.stopped
+            not run
             or run.backend_id != message
-            or time.monotonic() - topic.last_seen > 45
-            or not await self.is_active(topic.key_hash)
+            or not await self.tool_authorized(topic, run)
         ):
             raise ValueError("Reading task is unavailable")
         async with topic.tool_lock:
-            if run.stopped or topic.closed or topic.run is not run:
+            if not await self.tool_authorized(topic, run):
                 raise ValueError("Reading task is unavailable")
             # MCP peer identity is fixed by the host; arguments cannot select another grant.
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 topic.client.call_tool(TOOLS[name], arguments), 30
             )
+            if not await self.tool_authorized(topic, run):
+                raise ValueError("Reading task is unavailable")
+            return result
+
+    async def tool_authorized(self, topic: Topic, run: Run) -> bool:
+        active = await self.is_active(topic.key_hash)
+        # Recheck mutable state after the database await, including before returning data.
+        return bool(
+            active
+            and topic.ready
+            and topic.client is not None
+            and not topic.closed
+            and not topic.retired
+            and topic.run is run
+            and not run.stopped
+            and not run.finished
+            and time.monotonic() - topic.last_seen <= 45
+        )
 
     async def cancel(self, topic: Topic, key: str):
+        # A cancelled topic is terminal, including while its upstream stop is pending.
+        topic.retired = True
+        if topic.run:
+            topic.run.stopped = True
+        async with topic.control_lock:
+            if topic.closed:
+                return
+            await self.stop_upstream(topic, key)
+
+    async def stop_upstream(self, topic: Topic, key: str):
         run = topic.run
-        if run:
-            run.stopped = True  # reject tools before contacting upstream
-            # Wait for ChatService's queue acknowledgement before sending stop.
-            # Otherwise an immediate stop can overtake the HTTP chat request.
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(run.queued.wait(), 5)
-        result = await self.api.request(
-            key, "POST", f"/api/v1/chat/sessions/{topic.session}/stop"
-        )
-        if run and run.task and not run.task.done():
-            run.task.cancel()
-            await asyncio.gather(run.task, return_exceptions=True)
-        return result
+        try:
+            async with asyncio.timeout(10):
+                if run:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(run.queued.wait(), 5)
+                while True:
+                    await self.api.request(
+                        key, "POST", f"/api/v1/chat/sessions/{topic.session}/stop"
+                    )
+                    state = await self.api.request(
+                        key, "GET", f"/api/v1/chat/sessions/{topic.session}"
+                    )
+                    # An HTTP acknowledgement alone does not prove a run has stopped.
+                    if (
+                        state.get("is_running") is False
+                        and state.get("active_runs") == []
+                    ):
+                        return
+                    await asyncio.sleep(0.2)
+        finally:
+            if run and run.task and not run.task.done():
+                run.task.cancel()
+                await asyncio.gather(run.task, return_exceptions=True)
+
+    async def close_topic(self, topic: Topic, key: str):
+        topic.retired = True
+        if topic.run:
+            topic.run.stopped = True
+        async with topic.control_lock:
+            if topic.closed:
+                return
+            try:
+                # Deletion is also attempted if the stop acknowledgement fails.
+                with contextlib.suppress(Exception):
+                    await self.stop_upstream(topic, key)
+                await asyncio.wait_for(
+                    self.api.request(
+                        key, "DELETE", f"/api/v1/chat/sessions/{topic.session}"
+                    ),
+                    5,
+                )
+            finally:
+                # Free local capacity even when the upstream session needs manual cleanup.
+                await self.remove(topic)
 
     async def remove(self, topic: Topic):
         topic.closed = True
+        topic.retired = True
         topic.stopped.set()
         topic.wake.set()
         if topic.run:
@@ -418,14 +474,17 @@ class Bridge:
     async def reap(self):
         while True:
             await asyncio.sleep(10)
-            for topic in list(self.topics.values()):
-                active = topic.run and not topic.run.finished
-                if topic.closed or time.monotonic() - topic.last_seen > (
-                    45 if active else 600
-                ):
-                    # No raw key is retained for cleanup. Deny tools and drop subscriptions;
-                    # model execution may continue upstream until its own timeout.
-                    await self.remove(topic)
+            await self.reap_once()
+
+    async def reap_once(self):
+        for topic in list(self.topics.values()):
+            active = topic.run and not topic.run.finished
+            if topic.closed or time.monotonic() - topic.last_seen > (
+                45 if active else 600
+            ):
+                # No raw key is retained for cleanup. Deny tools and drop subscriptions;
+                # model execution may continue upstream until its own timeout.
+                await self.remove(topic)
 
     async def close(self):
         for topic in list(self.topics.values()):

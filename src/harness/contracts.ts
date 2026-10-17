@@ -34,6 +34,7 @@ export interface HarnessAdapter {
       provider?: ProviderAdapter
       question: string
       history: Message[]
+      priorEvidence?: Fragment[]
       settings: ModelSettings
       apiKey: string
       signal: AbortSignal
