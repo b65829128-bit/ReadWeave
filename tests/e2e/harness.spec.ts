@@ -291,6 +291,7 @@ async function configureFixture(page: Page) {
   await page.getByRole('textbox', { name: '服务地址' }).fill(endpoint)
   await page.getByLabel('模型名称', { exact: true }).fill('fixture-model')
   await page.getByRole('button', { name: '保存设置' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
 }
 
 test('stopping keeps one conversation, its frozen reading position and earlier citations on the next question', async ({
