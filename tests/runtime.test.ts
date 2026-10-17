@@ -126,6 +126,42 @@ function request(tools: ReadingTask, overrides: Partial<PrepareRun> = {}): Prepa
 }
 
 describe('host task runtime', () => {
+  it('releases a failed external session so retry cannot reuse a revoked task', async () => {
+    const f = fixture()
+    f.backend.adapter.capabilities.external = true
+    const tools = task()
+    await f.runtime.prepare(request(tools))
+    f.backend.runs[0].finished.reject(new Error('external failed'))
+    await vi.waitFor(() => expect(f.runtime.getSnapshot().phase).toBe('idle'))
+    expect(tools.revoke).toHaveBeenCalled()
+    const replacement = task()
+    const input = request(replacement)
+    await f.runtime.prepare(input)
+    expect(input.createTask).toHaveBeenCalled()
+    expect(f.backend.runs[1].request.tools).toBe(replacement)
+  })
+  it('runs an external harness without a local provider and closes after revoking authority', async () => {
+    const f = fixture()
+    f.backend.adapter.capabilities.external = true
+    f.providers.unregister(f.model.id)
+    const tools = task()
+    const revoked = deferred()
+    tools.revoke = vi.fn(() => revoked.promise)
+    f.backend.adapter.closeSession = vi.fn(async () => {})
+    await f.runtime.prepare(request(tools))
+    expect(f.backend.runs).toHaveLength(1)
+    expect(f.backend.runs[0].request.provider).toBeUndefined()
+    expect(f.runtime.getSnapshot().conversation?.backend?.providerId).toBeUndefined()
+    f.runtime.reset()
+    expect(tools.revoke).toHaveBeenCalled()
+    expect(f.backend.adapter.closeSession).not.toHaveBeenCalled()
+    revoked.resolve()
+    await vi.waitFor(() =>
+      expect(f.backend.adapter.closeSession).toHaveBeenCalledWith(
+        f.backend.runs[0].request.sessionRef,
+      ),
+    )
+  })
   it('waits for consent, captures model settings, and saves only task-issued evidence', async () => {
     const f = fixture()
     const tools = task()

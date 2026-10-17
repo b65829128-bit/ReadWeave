@@ -132,7 +132,10 @@ const conversation = z
       .max(200),
     evidence: z.array(fragment).max(256),
     createdAt: z.string().datetime(),
-    backend: z.object({ harnessId: id, providerId: id, sessionRef: id }).strict().optional(),
+    backend: z
+      .object({ harnessId: id, providerId: id.optional(), sessionRef: id })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((c) => c.bookId === c.snapshot.bookId, '会话和快照不属于同一本书。')
@@ -159,6 +162,8 @@ export const preferencesSchema = z
   .strict()
 export const modelSettingsSchema = z
   .object({
+    harness: z.enum(['builtin', 'astrbot']).default('builtin'),
+    astrbotEndpoint: z.string().max(2048).default('http://127.0.0.1:16186'),
     enabled: z.boolean().default(true),
     provider: z.enum(['deepseek', 'compatible']).optional(),
     endpoint: z.string().max(2048),

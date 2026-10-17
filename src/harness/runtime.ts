@@ -11,8 +11,13 @@ import type {
 import type { HarnessAdapter, ProviderAdapter, RunEvent } from './contracts'
 import { AdapterRegistry } from './registry'
 
-type Backend = { harness: HarnessAdapter; provider: ProviderAdapter }
-type Session = Backend & { tools: ReadingTask; settings: ModelSettings; apiKey: string }
+type Backend = { harness: HarnessAdapter; provider?: ProviderAdapter }
+type Session = Backend & {
+  tools: ReadingTask
+  settings: ModelSettings
+  apiKey: string
+  sessionRef: string
+}
 type PreparedRun = Session & { question: string }
 type Execution = {
   id: string
@@ -83,6 +88,12 @@ export class TaskRuntime {
     if (id) this.harnesses.setEnabled(id, enabled)
   }
 
+  configureHarness(id: string, enabled: boolean) {
+    this.harnesses.setEnabled(id, true)
+    this.harnesses.select(id)
+    this.harnesses.setEnabled(id, enabled)
+  }
+
   async prepare(request: PrepareRun): Promise<void> {
     if (!request.question.trim() || this.state.phase !== 'idle') return
     const { bookId, bookVersion, scope, question, apiKey, createTask, isApproved } = request
@@ -90,15 +101,18 @@ export class TaskRuntime {
     let tools: ReadingTask | undefined
     try {
       const harness = this.harnesses.current()
-      const provider = this.providers.current()
-      if (!request.settings.enabled || !harness || !provider)
+      const provider = harness?.capabilities.external
+        ? undefined
+        : (this.providers.current() ?? undefined)
+      if (!request.settings.enabled || !harness || (!harness.capabilities.external && !provider))
         throw new Error('阅读伙伴已停用或不可用，请在设置中重新启用。')
       if (
         !harness.capabilities.tools ||
         !harness.capabilities.cancel ||
-        !provider.capabilities.streaming ||
-        !provider.capabilities.tools ||
-        !provider.capabilities.cancel
+        (provider &&
+          (!provider.capabilities.streaming ||
+            !provider.capabilities.tools ||
+            !provider.capabilities.cancel))
       )
         throw new Error('所选连接不支持当前阅读任务所需的流式回答、书内工具或取消。')
       const backend = { harness, provider }
@@ -131,7 +145,8 @@ export class TaskRuntime {
         tools.snapshot.scope !== scope
       )
         throw new Error('阅读任务与当前书籍版本或授权范围不一致。')
-      this.session = { ...backend, tools, settings, apiKey }
+      const sessionRef = previous?.tools === tools ? previous.sessionRef : crypto.randomUUID()
+      this.session = { ...backend, tools, settings, apiKey, sessionRef }
       const prepared = { ...this.session, question }
       const approved = isApproved(tools.snapshot)
       this.preparation = null
@@ -223,8 +238,8 @@ export class TaskRuntime {
           createdAt: new Date().toISOString(),
           backend: {
             harnessId: context.harness.id,
-            providerId: context.provider.id,
-            sessionRef: crypto.randomUUID(),
+            ...(context.provider ? { providerId: context.provider.id } : {}),
+            sessionRef: context.sessionRef,
           },
         }
     conversation.messages.push(
@@ -267,6 +282,7 @@ export class TaskRuntime {
     } catch (error) {
       if (this.active !== run) return
       this.finish(run, 'error')
+      if (run.context.harness.capabilities.external) this.releaseSession()
       this.persistence.onError(
         error instanceof TypeError
           ? new Error(
@@ -394,7 +410,8 @@ export class TaskRuntime {
 
   private isCurrent(backend: Backend) {
     return (
-      this.harnesses.current() === backend.harness && this.providers.current() === backend.provider
+      this.harnesses.current() === backend.harness &&
+      (backend.harness.capabilities.external || this.providers.current() === backend.provider)
     )
   }
 
@@ -404,7 +421,15 @@ export class TaskRuntime {
   }
 
   private releaseSession() {
-    if (this.session) this.release(this.session.tools)
+    if (this.session) {
+      const session = this.session
+      this.release(session.tools)
+      if (session.harness.closeSession)
+        void session.tools
+          .revoke()
+          .then(() => session.harness.closeSession!(session.sessionRef))
+          .catch((error) => this.persistence.onError(error))
+    }
     this.session = null
   }
 

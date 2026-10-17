@@ -3,6 +3,7 @@ import { Check, Download, KeyRound, LockKeyhole, Moon, Sun, Upload } from 'lucid
 import { Modal } from './Modal'
 import { defaultModel, type ModelSettings, type Preferences, type Theme } from '../core/types'
 import { completionEndpoint } from '../harness/provider'
+import { astrbotEndpoint } from '../harness/astrbot'
 
 export function Appearance({
   value,
@@ -68,6 +69,7 @@ export function Appearance({
 export function SettingsDialog({
   settings,
   apiKey,
+  astrbotApiKey,
   hasApiKey,
   secureStorage,
   preferences,
@@ -79,6 +81,7 @@ export function SettingsDialog({
 }: {
   settings: ModelSettings
   apiKey: string
+  astrbotApiKey: string
   hasApiKey: boolean
   secureStorage: boolean
   preferences: Preferences
@@ -93,7 +96,11 @@ export function SettingsDialog({
 }) {
   const [tab, setTab] = useState<'model' | 'reading' | 'data'>('model')
   const [draft, setDraft] = useState(settings)
-  const [key, setKey] = useState(apiKey)
+  const [modelKey, setModelKey] = useState(apiKey)
+  const [externalKey, setExternalKey] = useState(astrbotApiKey)
+  const external = draft.harness === 'astrbot'
+  const key = external ? externalKey : modelKey
+  const setKey = external ? setExternalKey : setModelKey
   const [keyChange, setKeyChange] = useState<'keep' | 'delete'>('keep')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -102,22 +109,29 @@ export function SettingsDialog({
     event.preventDefault()
     setError('')
     try {
-      const endpoint = completionEndpoint(draft.endpoint)
+      const endpoint = external
+        ? astrbotEndpoint(draft.astrbotEndpoint ?? '')
+        : completionEndpoint(draft.endpoint)
       const availableKey = key.trim() || (hasApiKey && keyChange !== 'delete')
       const deletingKey = !key.trim() && keyChange === 'delete'
       if (
         draft.enabled &&
-        !availableKey &&
+        !(external ? key.trim() : availableKey) &&
         !deletingKey &&
-        !['localhost', '127.0.0.1', '[::1]'].includes(new URL(endpoint).hostname)
+        (external || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(endpoint).hostname))
       )
         throw new Error('请输入密钥；无需密钥的本机服务可以留空。')
-      if (!draft.model.trim() || !draft.systemPrompt.trim())
+      if (!external && (!draft.model.trim() || !draft.systemPrompt.trim()))
         throw new Error('请填写模型名称和回答偏好。')
       setSaving(true)
       await onSave(
-        { ...draft, endpoint: draft.endpoint.trim(), model: draft.model.trim() },
-        key.trim() ? { kind: 'set', value: key.trim() } : { kind: keyChange },
+        {
+          ...draft,
+          endpoint: draft.endpoint.trim(),
+          model: draft.model.trim(),
+          ...(external ? { astrbotEndpoint: endpoint } : {}),
+        },
+        key.trim() ? { kind: 'set', value: key.trim() } : { kind: external ? 'delete' : keyChange },
       )
       onClose()
     } catch (error) {
@@ -159,115 +173,151 @@ export function SettingsDialog({
             启用阅读伙伴
           </label>
           <label className="field">
-            模型服务
+            阅读伙伴
             <select
-              value={draft.provider}
+              aria-label="阅读伙伴"
+              value={draft.harness ?? 'builtin'}
               onChange={(event) =>
-                setDraft(
-                  event.target.value === 'deepseek'
-                    ? {
-                        ...draft,
-                        provider: 'deepseek',
-                        endpoint: defaultModel.endpoint,
-                        model: defaultModel.model,
-                      }
-                    : { ...draft, provider: 'compatible' },
-                )
+                setDraft({ ...draft, harness: event.target.value as ModelSettings['harness'] })
               }
             >
-              <option value="deepseek">DeepSeek</option>
-              <option value="compatible">其他兼容服务</option>
+              <option value="builtin">内置阅读伙伴</option>
+              <option value="astrbot">AstrBot v4.27.4 · 内置 Agent</option>
             </select>
           </label>
-          <label className="field">
-            服务地址
-            <input
-              value={draft.endpoint}
-              type="url"
-              required
-              maxLength={2048}
-              onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
-              placeholder="https://your-provider.example/v1"
-            />
-            <small>支持 Chat Completions 兼容接口；本机服务可用 HTTP。</small>
-          </label>
-          <label className="field">
-            模型名称
-            <input
-              value={draft.model}
-              aria-label="模型名称"
-              required
-              maxLength={160}
-              onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-              placeholder="模型服务提供的名称"
-              list={draft.provider === 'deepseek' ? 'deepseek-models' : undefined}
-            />
-            {draft.provider === 'deepseek' && (
-              <>
-                <datalist id="deepseek-models">
-                  <option value="deepseek-flash" />
-                  <option value="deepseek-v4-pro" />
-                </datalist>
-                <small>
-                  官方当前模型：deepseek-flash、deepseek-v4-pro。已有模型名称会保留，可自行切换。
-                </small>
-              </>
-            )}
-          </label>
-          {draft.provider === 'deepseek' && (
-            <div className="thinking-settings">
+          {external ? (
+            <label className="field">
+              AstrBot 桥接地址
+              <input
+                aria-label="AstrBot 桥接地址"
+                type="url"
+                required
+                maxLength={2048}
+                value={draft.astrbotEndpoint ?? ''}
+                onChange={(event) => setDraft({ ...draft, astrbotEndpoint: event.target.value })}
+                placeholder="http://127.0.0.1:16186"
+              />
+              <small>
+                先安装 ReadWeave 桥接插件并连接 SSH 隧道。使用 AstrBot 上已配置的模型；书内工具需
+                Windows 或 Android 客户端。
+              </small>
+            </label>
+          ) : (
+            <>
               <label className="field">
-                思考模式
+                模型服务
                 <select
-                  aria-label="思考模式"
-                  value={draft.thinking}
+                  value={draft.provider}
                   onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      thinking: event.target.value as ModelSettings['thinking'],
-                    })
+                    setDraft(
+                      event.target.value === 'deepseek'
+                        ? {
+                            ...draft,
+                            provider: 'deepseek',
+                            endpoint: defaultModel.endpoint,
+                            model: defaultModel.model,
+                          }
+                        : { ...draft, provider: 'compatible' },
+                    )
                   }
                 >
-                  <option value="enabled">开启 · 展示模型的思考过程</option>
-                  <option value="disabled">关闭 · 直接回答</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="compatible">其他兼容服务</option>
                 </select>
               </label>
               <label className="field">
-                思考强度
+                服务地址
+                <input
+                  value={draft.endpoint}
+                  type="url"
+                  required
+                  maxLength={2048}
+                  onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
+                  placeholder="https://your-provider.example/v1"
+                />
+                <small>支持 Chat Completions 兼容接口；本机服务可用 HTTP。</small>
+              </label>
+              <label className="field">
+                模型名称
+                <input
+                  value={draft.model}
+                  aria-label="模型名称"
+                  required
+                  maxLength={160}
+                  onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                  placeholder="模型服务提供的名称"
+                  list={draft.provider === 'deepseek' ? 'deepseek-models' : undefined}
+                />
+                {draft.provider === 'deepseek' && (
+                  <>
+                    <datalist id="deepseek-models">
+                      <option value="deepseek-flash" />
+                      <option value="deepseek-v4-pro" />
+                    </datalist>
+                    <small>
+                      官方当前模型：deepseek-flash、deepseek-v4-pro。已有模型名称会保留，可自行切换。
+                    </small>
+                  </>
+                )}
+              </label>
+              {draft.provider === 'deepseek' && (
+                <div className="thinking-settings">
+                  <label className="field">
+                    思考模式
+                    <select
+                      aria-label="思考模式"
+                      value={draft.thinking}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          thinking: event.target.value as ModelSettings['thinking'],
+                        })
+                      }
+                    >
+                      <option value="enabled">开启 · 展示模型的思考过程</option>
+                      <option value="disabled">关闭 · 直接回答</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    思考强度
+                    <select
+                      aria-label="思考强度"
+                      value={draft.reasoningEffort}
+                      disabled={draft.thinking === 'disabled'}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          reasoningEffort: event.target.value as ModelSettings['reasoningEffort'],
+                        })
+                      }
+                    >
+                      <option value="low">低 · 更快</option>
+                      <option value="high">高 · 日常推理</option>
+                      <option value="max">最高 · 复杂推理</option>
+                    </select>
+                    <small>思考内容逐步显示在回答上方，可展开或收起；更高强度可能等待更久。</small>
+                  </label>
+                </div>
+              )}
+              <label className="field">
+                单次输出预算
                 <select
-                  aria-label="思考强度"
-                  value={draft.reasoningEffort}
-                  disabled={draft.thinking === 'disabled'}
+                  aria-label="单次输出预算"
+                  value={draft.maxTokens}
                   onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      reasoningEffort: event.target.value as ModelSettings['reasoningEffort'],
-                    })
+                    setDraft({ ...draft, maxTokens: Number(event.target.value) })
                   }
                 >
-                  <option value="low">低 · 更快</option>
-                  <option value="high">高 · 日常推理</option>
-                  <option value="max">最高 · 复杂推理</option>
+                  {[8192, 16384, 32768, 65536].map((value) => (
+                    <option key={value} value={value}>
+                      {value.toLocaleString()} tokens
+                    </option>
+                  ))}
                 </select>
-                <small>思考内容逐步显示在回答上方，可展开或收起；更高强度可能等待更久。</small>
+                <small>思考与回答共用此预算，实际用量由模型服务计费。</small>
               </label>
-            </div>
+            </>
           )}
-          <label className="field">
-            单次输出预算
-            <select
-              aria-label="单次输出预算"
-              value={draft.maxTokens}
-              onChange={(event) => setDraft({ ...draft, maxTokens: Number(event.target.value) })}
-            >
-              {[8192, 16384, 32768, 65536].map((value) => (
-                <option key={value} value={value}>
-                  {value.toLocaleString()} tokens
-                </option>
-              ))}
-            </select>
-            <small>思考与回答共用此预算，实际用量由模型服务计费。</small>
-          </label>
           <label className="field">
             <span>
               <KeyRound size={14} /> 服务密钥
@@ -281,12 +331,18 @@ export function SettingsDialog({
               onChange={(event) => {
                 setKey(event.target.value)
                 if (event.target.value) setKeyChange('keep')
-                else if (hasApiKey) setKeyChange('delete')
+                else if (hasApiKey && !external) setKeyChange('delete')
               }}
-              placeholder={hasApiKey ? '已保存；留空保留当前密钥' : '输入服务密钥'}
+              placeholder={
+                external
+                  ? '输入仅有 chat 权限的 AstrBot API Key'
+                  : hasApiKey
+                    ? '已保存；留空保留当前密钥'
+                    : '输入服务密钥'
+              }
             />
           </label>
-          {hasApiKey && (
+          {hasApiKey && !external && (
             <button
               className="button"
               type="button"
@@ -301,28 +357,36 @@ export function SettingsDialog({
           <div className="inline-notice">
             <LockKeyhole size={17} />
             <span>
-              {secureStorage
-                ? '密钥保存在本机系统安全凭据区，由 Windows 凭据管理器或 Android Keystore 保护；不进入书籍数据库或备份。输入新密钥可替换，留空会保留当前密钥。'
-                : '浏览器预览中的密钥只保存在当前运行内存，关闭或刷新后清除；不写入本地数据库或备份。'}
+              {external
+                ? 'AstrBot 密钥只保留在本次运行内存，关闭后需要重新输入；不进入数据库、备份或模型服务的凭据区。'
+                : secureStorage
+                  ? '密钥保存在本机系统安全凭据区，由 Windows 凭据管理器或 Android Keystore 保护；不进入书籍数据库或备份。输入新密钥可替换，留空会保留当前密钥。'
+                  : '浏览器预览中的密钥只保存在当前运行内存，关闭或刷新后清除；不写入本地数据库或备份。'}
             </span>
           </div>
-          <label className="field">
-            回答偏好
-            <textarea
-              rows={4}
-              required
-              maxLength={8000}
-              value={draft.systemPrompt}
-              onChange={(event) => setDraft({ ...draft, systemPrompt: event.target.value })}
-            />
-          </label>
+          {!external && (
+            <label className="field">
+              回答偏好
+              <textarea
+                rows={4}
+                required
+                maxLength={8000}
+                value={draft.systemPrompt}
+                onChange={(event) => setDraft({ ...draft, systemPrompt: event.target.value })}
+              />
+            </label>
+          )}
           {error && (
             <p className="form-error" role="alert">
               {error}
             </p>
           )}
           <div className="modal-footer">
-            <span className="muted">外部 Harness 和联网搜索尚未接入</span>
+            <span className="muted">
+              {external
+                ? '固定 AstrBot v4.27.4，接入尚待设备联调验收'
+                : '只在发送问题后提供阅读资料'}
+            </span>
             <button className="button primary" type="submit" disabled={saving}>
               {saving ? '保存中…' : '保存设置'}
             </button>

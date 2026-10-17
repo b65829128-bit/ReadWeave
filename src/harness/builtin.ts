@@ -15,6 +15,7 @@ export const builtinHarness: HarnessAdapter = {
     { tools, runId, sessionRef, provider, question, history, settings, apiKey, signal },
     onEvent,
   ) {
+    if (!provider) throw new Error('内置阅读伙伴缺少模型连接。')
     let sequence = 0
     const emit = (event: EventPayload) => {
       if (!signal.aborted)

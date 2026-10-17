@@ -100,6 +100,33 @@ async function settingsStorage(page: Page): Promise<string> {
   })
 }
 
+test('AstrBot selection uses server models and keeps its key only in memory', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await page.getByLabel('阅读伙伴', { exact: true }).selectOption('astrbot')
+  await expect(page.getByLabel('AstrBot 桥接地址', { exact: true })).toHaveValue(
+    'http://127.0.0.1:16186',
+  )
+  await expect(page.getByLabel('模型名称', { exact: true })).toHaveCount(0)
+  await page.getByLabel('服务密钥', { exact: true }).fill('abk_synthetic_external_memory')
+  await page.getByRole('button', { name: '保存设置' }).click()
+  const saved = await settingsStorage(page)
+  expect(saved).toContain('astrbot')
+  expect(saved).not.toContain('abk_synthetic_external_memory')
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await page.getByLabel('阅读伙伴', { exact: true }).selectOption('builtin')
+  await expect(page.getByLabel('模型名称', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('服务密钥', { exact: true })).toHaveValue('')
+  await page.getByLabel('阅读伙伴', { exact: true }).selectOption('astrbot')
+  await expect(page.getByLabel('服务密钥', { exact: true })).toHaveValue(
+    'abk_synthetic_external_memory',
+  )
+  await page.reload()
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await expect(page.getByLabel('阅读伙伴', { exact: true })).toHaveValue('astrbot')
+  await expect(page.getByLabel('服务密钥', { exact: true })).toHaveValue('')
+})
+
 test('streamed tool loop, frozen context, verified citation, follow-up, cancellation and ephemeral key', async ({
   page,
 }) => {

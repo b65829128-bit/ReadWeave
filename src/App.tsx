@@ -115,6 +115,7 @@ export default function App() {
   const [preferences, setPreferences] = useState(defaultPreferences)
   const [model, setModel] = useState(defaultModel)
   const [apiKey, setApiKey] = useState('')
+  const [astrbotApiKey, setAstrbotApiKey] = useState('')
   const [hasApiKey, setHasApiKey] = useState(false)
   const [configured, setConfigured] = useState(false)
   const [loaded, setLoaded] = useState<LoadedBook | null>(null)
@@ -234,9 +235,12 @@ export default function App() {
       const initialModel = nextModel.success ? nextModel.data : defaultModel
       setPreferences(initialPreferences)
       setModel(initialModel)
-      taskRuntime.setEnabled(initialModel.enabled)
+      taskRuntime.configureHarness(initialModel.harness ?? 'builtin', initialModel.enabled)
       setHasApiKey(savedCredential)
-      setConfigured(savedCredential || allowsKeylessModelEndpoint(initialModel.endpoint))
+      setConfigured(
+        initialModel.harness !== 'astrbot' &&
+          (savedCredential || allowsKeylessModelEndpoint(initialModel.endpoint)),
+      )
       await storage.put('settings', 'preferences', initialPreferences)
       await storage.put('settings', 'model', initialModel)
       if (!seeded) {
@@ -547,6 +551,7 @@ export default function App() {
       taskRuntime.providers.selectedId,
       model.endpoint,
       model.model,
+      model.astrbotEndpoint,
       snapshot.bookVersion,
       snapshot.scope,
     ])
@@ -569,7 +574,7 @@ export default function App() {
       scope: preferences.scope,
       question,
       settings: model,
-      apiKey,
+      apiKey: model.harness === 'astrbot' ? astrbotApiKey : apiKey,
       createTask: (signal) =>
         readingService.create(source.record, source.paragraphs, point, preferences.scope, signal),
       isApproved: (snapshot) => grants.current.has(grantKey(snapshot)),
@@ -1213,6 +1218,7 @@ export default function App() {
         <SettingsDialog
           settings={model}
           apiKey={isTauri() ? '' : apiKey}
+          astrbotApiKey={astrbotApiKey}
           hasApiKey={hasApiKey || (!isTauri() && !!apiKey)}
           secureStorage={isTauri()}
           preferences={preferences}
@@ -1221,7 +1227,15 @@ export default function App() {
             cancel()
             await storage.put('settings', 'model', checked)
             setModel(checked)
-            taskRuntime.setEnabled(checked.enabled)
+            taskRuntime.configureHarness(checked.harness ?? 'builtin', checked.enabled)
+            if (checked.harness === 'astrbot') {
+              const key = credentialChange.kind === 'set' ? credentialChange.value : ''
+              setAstrbotApiKey(key)
+              setConfigured(!!key)
+              grants.current.clear()
+              notify('AstrBot 设置已保存，密钥只保留在本次运行内存。')
+              return
+            }
             let nextHasApiKey = hasApiKey
             if (isTauri()) {
               if (credentialChange.kind === 'set') {
@@ -1316,7 +1330,11 @@ export default function App() {
       )}
       {pending && (
         <Modal title="发送前，看看会分享什么" onClose={dismissPreview} wide>
-          <p className="muted">问题和下列原文将发送给你配置的模型服务。服务可能保留收到的内容。</p>
+          <p className="muted">
+            {model.harness === 'astrbot'
+              ? '问题和下列原文将发送给你的 AstrBot 服务器及其模型。AstrBot 会保存聊天，已启用的其他插件也可能接触这些资料。'
+              : '问题和下列原文将发送给你配置的模型服务。服务可能保留收到的内容。'}
+          </p>
           <dl className="send-details">
             <div>
               <dt>接收服务</dt>
@@ -1471,9 +1489,14 @@ export default function App() {
                   setPreferences(restorePreview.preferences)
                   setModel(restorePreview.model)
                   taskRuntime.reset()
-                  taskRuntime.setEnabled(restorePreview.model.enabled)
+                  taskRuntime.configureHarness(
+                    restorePreview.model.harness ?? 'builtin',
+                    restorePreview.model.enabled,
+                  )
                   setConfigured(
-                    hasApiKey || allowsKeylessModelEndpoint(restorePreview.model.endpoint),
+                    restorePreview.model.harness === 'astrbot'
+                      ? !!astrbotApiKey
+                      : hasApiKey || allowsKeylessModelEndpoint(restorePreview.model.endpoint),
                   )
                   grants.current.clear()
                   setRestorePreview(null)

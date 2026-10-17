@@ -25,12 +25,13 @@ export type RunEvent = {
 export interface HarnessAdapter {
   id: string
   capabilities: { tools: boolean; cancel: boolean; external: boolean }
+  closeSession?(sessionRef: string): Promise<void>
   submit(
     request: {
       tools: ReadingTask
       runId: string
       sessionRef: string
-      provider: ProviderAdapter
+      provider?: ProviderAdapter
       question: string
       history: Message[]
       settings: ModelSettings
